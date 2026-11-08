@@ -53,11 +53,9 @@ var (
 		regexp.MustCompile(`\brm\s+-[rf]{1,2}\b`),
 		regexp.MustCompile(`\bdel\s+/[fq]\b`),
 		regexp.MustCompile(`\brmdir\s+/s\b`),
-		// Match disk wiping commands (must be followed by space/args).
-		// `mkfs\.\w+` covers filesystem-specific variants (mkfs.ext4, mkfs.xfs, …)
-		// which the plain `mkfs` alternative misses because of the dot.
+		// Match disk wiping commands (must be followed by space/args)
 		regexp.MustCompile(
-			`(^|[^-\w])\b(format|mkfs|mkfs\.\w+|diskpart)\b\s`,
+			`(^|[^-\w])\b(format|mkfs|diskpart)\b\s`,
 		),
 		regexp.MustCompile(`\bdd\s+if=`),
 		// Block writes to block devices (all common naming schemes).
@@ -66,22 +64,25 @@ var (
 		),
 		regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
 		regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
+		regexp.MustCompile(`\$\([^)]+\)`),
+		regexp.MustCompile(`\$\{[^}]+\}`),
+		regexp.MustCompile("`[^`]+`"),
 		regexp.MustCompile(`\|\s*sh\b`),
 		regexp.MustCompile(`\|\s*bash\b`),
 		regexp.MustCompile(`;\s*rm\s+-[rf]`),
 		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
 		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
+		regexp.MustCompile(`<<\s*EOF`),
 		regexp.MustCompile(`\$\(\s*cat\s+`),
 		regexp.MustCompile(`\$\(\s*curl\s+`),
 		regexp.MustCompile(`\$\(\s*wget\s+`),
 		regexp.MustCompile(`\$\(\s*which\s+`),
 		regexp.MustCompile(`\bsudo\b`),
+		regexp.MustCompile(`\bchmod\s+[0-7]{3,4}\b`),
 		regexp.MustCompile(`\bchown\b`),
 		regexp.MustCompile(`\bpkill\b`),
-		// Only "kill -1" / "kill -9 -1" (all processes) is dangerous;
-		// targeted PID kills are legitimate and must stay allowed.
-		regexp.MustCompile(`\bkill\s+(-[0-9]+\s+)?-1\b`),
 		regexp.MustCompile(`\bkillall\b`),
+		regexp.MustCompile(`\bkill\b`),
 		regexp.MustCompile(`\bcurl\b.*\|\s*(sh|bash)`),
 		regexp.MustCompile(`\bwget\b.*\|\s*(sh|bash)`),
 		regexp.MustCompile(`\bnpm\s+install\s+-g\b`),
@@ -91,9 +92,11 @@ var (
 		regexp.MustCompile(`\bdnf\s+(install|remove)\b`),
 		regexp.MustCompile(`\bdocker\s+run\b`),
 		regexp.MustCompile(`\bdocker\s+exec\b`),
+		regexp.MustCompile(`\bgit\s+push\b`),
 		regexp.MustCompile(`\bgit\s+force\b`),
 		regexp.MustCompile(`\bssh\b.*@`),
 		regexp.MustCompile(`\beval\b`),
+		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
 	}
 
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
@@ -1132,35 +1135,36 @@ func expandPowerShellEnvVars(cmd string) string {
 	})
 }
 
-func (t *ExecTool) commandMatchesAllowPattern(lower string) bool {
-	for _, pattern := range t.allowPatterns {
-		if pattern.MatchString(lower) {
-			return true
-		}
-	}
-	for _, pattern := range t.customAllowPatterns {
-		if pattern.MatchString(lower) {
-			return true
-		}
-	}
-	return false
-}
-
 func (t *ExecTool) guardCommand(command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
 
-	// Deny patterns always apply, even when a command matches a custom allow rule.
-	// Custom allow rules can permit a command, but must not disable secret-safety
-	// deny rules such as jq env access checks (#3079).
-	for _, pattern := range t.denyPatterns {
+	// Custom allow patterns exempt a command from deny checks.
+	explicitlyAllowed := false
+	for _, pattern := range t.customAllowPatterns {
 		if pattern.MatchString(lower) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
+			explicitlyAllowed = true
+			break
+		}
+	}
+
+	if !explicitlyAllowed {
+		for _, pattern := range t.denyPatterns {
+			if pattern.MatchString(lower) {
+				return "Command blocked by safety guard (dangerous pattern detected)"
+			}
 		}
 	}
 
 	if len(t.allowPatterns) > 0 {
-		if !t.commandMatchesAllowPattern(lower) {
+		allowed := false
+		for _, pattern := range t.allowPatterns {
+			if pattern.MatchString(lower) {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
 			return "Command blocked by safety guard (not in allowlist)"
 		}
 	}
