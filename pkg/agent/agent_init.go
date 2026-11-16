@@ -5,6 +5,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,7 +43,12 @@ func NewAgentLoop(
 			rl.RegisterCandidates(agent.LightCandidates)
 		}
 	}
-	fallbackChain := providers.NewFallbackChain(cooldown, rl)
+	quotaStore := providers.NewQuotaStore(modelQuotaStorePath(cfg.Agents.Defaults.Workspace))
+	fallbackChain := providers.NewFallbackChain(
+		cooldown,
+		rl,
+		providers.WithQuotaStore(quotaStore),
+	)
 
 	// Create state manager using default agent's workspace for channel recording
 	defaultAgent := registry.GetDefaultAgent()
@@ -405,4 +412,14 @@ func registerSharedTools(
 
 		warnOnUnknownAgentToolDeclarations(agentID, agent.Workspace, agent.Definition, agent.Tools)
 	}
+}
+
+// modelQuotaStorePath returns the persistent model-quota state file location.
+// The store survives gateway restarts so a free model whose daily quota is
+// exhausted is not called again until the quota reset.
+func modelQuotaStorePath(workspace string) string {
+	if strings.TrimSpace(workspace) == "" {
+		return ""
+	}
+	return filepath.Join(workspace, "state", "model_quota.json")
 }

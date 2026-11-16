@@ -11,6 +11,18 @@ import (
 type FallbackChain struct {
 	cooldown *CooldownTracker
 	rl       *RateLimiterRegistry
+	quota    *QuotaStore
+}
+
+// FallbackOption customizes a FallbackChain.
+type FallbackOption func(*FallbackChain)
+
+// WithQuotaStore enables persistent quota blocking (free-tier daily limits and
+// billing cooldowns survive gateway restarts).
+func WithQuotaStore(qs *QuotaStore) FallbackOption {
+	return func(fc *FallbackChain) {
+		fc.quota = qs
+	}
 }
 
 // FallbackCandidate represents one model/provider to try.
@@ -22,6 +34,10 @@ type FallbackCandidate struct {
 	IdentityKey string // optional stable config identity for cooldown/rate limiting
 	ConfigIndex int    // optional 1-based model_list index selected during resolution
 	ConfigKey   string // optional hashed model_list identity, stable across reordering
+	// Free marks a free-tier model. When such a model reports a rate-limit or
+	// quota error, it is skipped until the next daily quota reset instead of
+	// being retried on every turn.
+	Free bool
 }
 
 // StableKey returns the candidate's config-level identity when available,
@@ -60,8 +76,14 @@ type FallbackAttempt struct {
 
 // NewFallbackChain creates a new fallback chain with the given cooldown tracker
 // and rate limiter registry.
-func NewFallbackChain(cooldown *CooldownTracker, rl *RateLimiterRegistry) *FallbackChain {
-	return &FallbackChain{cooldown: cooldown, rl: rl}
+func NewFallbackChain(cooldown *CooldownTracker, rl *RateLimiterRegistry, opts ...FallbackOption) *FallbackChain {
+	fc := &FallbackChain{cooldown: cooldown, rl: rl}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(fc)
+		}
+	}
+	return fc
 }
 
 // ResolveCandidates parses model config into a deduplicated candidate list.
@@ -176,6 +198,25 @@ func (fc *FallbackChain) ExecuteCandidate(
 			continue
 		}
 
+		// Persistent quota block: free-tier daily limit exhausted or billing hold.
+		// These survive gateway restarts, unlike the in-memory cooldown.
+		if fc.quota != nil {
+			if blocked, remaining := fc.quota.Blocked(cooldownKey); blocked {
+				result.Attempts = append(result.Attempts, FallbackAttempt{
+					Provider: candidate.Provider,
+					Model:    candidate.Model,
+					Skipped:  true,
+					Reason:   FailoverRateLimit,
+					Error: fmt.Errorf(
+						"%s blocked until quota reset (%s remaining)",
+						cooldownKey,
+						remaining.Round(time.Minute),
+					),
+				})
+				continue
+			}
+		}
+
 		// Enforce per-candidate rate limit before calling the provider.
 		// If this candidate is locally saturated, try other candidates first.
 		if fc.rl != nil {
@@ -211,6 +252,9 @@ func (fc *FallbackChain) ExecuteCandidate(
 		if err == nil {
 			// Success.
 			fc.cooldown.MarkSuccess(cooldownKey)
+			if fc.quota != nil {
+				fc.quota.Clear(cooldownKey)
+			}
 			result.Response = resp
 			result.Provider = candidate.Provider
 			result.Model = candidate.Model
@@ -258,6 +302,20 @@ func (fc *FallbackChain) ExecuteCandidate(
 
 		// Retriable error: mark failure and continue to next candidate.
 		fc.cooldown.MarkFailure(cooldownKey, failErr.Reason)
+		if fc.quota != nil {
+			switch {
+			case failErr.Reason == FailoverBilling:
+				until := time.Now().Add(fc.cooldown.CooldownRemaining(cooldownKey))
+				fc.quota.BlockUntil(cooldownKey, candidate.Model, "billing", until)
+			case candidate.Free && failErr.Reason == FailoverRateLimit:
+				fc.quota.BlockUntil(
+					cooldownKey,
+					candidate.Model,
+					"free_rate_limit",
+					NextDailyQuotaReset(time.Now()),
+				)
+			}
+		}
 		result.Attempts = append(result.Attempts, FallbackAttempt{
 			Provider: candidate.Provider,
 			Model:    candidate.Model,

@@ -445,7 +445,11 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 			newRL.RegisterCandidates(agent.LightCandidates)
 		}
 	}
-	al.fallback = providers.NewFallbackChain(providers.NewCooldownTracker(), newRL)
+	al.fallback = providers.NewFallbackChain(
+		providers.NewCooldownTracker(),
+		newRL,
+		providers.WithQuotaStore(providers.NewQuotaStore(modelQuotaStorePath(cfg.Agents.Defaults.Workspace))),
+	)
 
 	al.mu.Unlock()
 	al.refreshRuntimeEventLogger(cfg)

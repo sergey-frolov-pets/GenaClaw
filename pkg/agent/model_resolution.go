@@ -51,6 +51,7 @@ func modelConfigResolutionKey(defaultProvider string, mc *config.ModelConfig) st
 		Workspace           string                      `json:"workspace"`
 		APIKeys             []string                    `json:"api_keys"`
 		Enabled             bool                        `json:"enabled"`
+		Free                bool                        `json:"free"`
 		UserAgent           string                      `json:"user_agent"`
 		RPM                 int                         `json:"rpm"`
 		RequestTimeout      int                         `json:"request_timeout"`
@@ -64,7 +65,7 @@ func modelConfigResolutionKey(defaultProvider string, mc *config.ModelConfig) st
 		ModelName: mc.ModelName, Provider: provider, Model: modelID,
 		APIBase: mc.APIBase, Proxy: mc.Proxy, AuthMethod: mc.AuthMethod,
 		ConnectMode: mc.ConnectMode, Workspace: mc.Workspace, APIKeys: apiKeys,
-		Enabled: mc.Enabled, UserAgent: mc.UserAgent, RPM: mc.RPM,
+		Enabled: mc.Enabled, Free: mc.Free, UserAgent: mc.UserAgent, RPM: mc.RPM,
 		RequestTimeout: mc.RequestTimeout, MaxTokensField: mc.MaxTokensField,
 		ThinkingLevel: mc.ThinkingLevel, ToolSchemaTransform: mc.ToolSchemaTransform,
 		Streaming: mc.Streaming, ExtraBody: mc.ExtraBody, CustomHeaders: mc.CustomHeaders,
@@ -129,7 +130,25 @@ func candidateFromModelConfig(
 		RPM:         mc.RPM,
 		IdentityKey: modelConfigIdentityKey(mc),
 		ConfigKey:   modelConfigResolutionKey(defaultProvider, mc),
+		Free:        mc.Free || isFreeTierModelID(modelID, mc.Model),
 	}, true
+}
+
+// isFreeTierModelID detects free-tier models by naming convention
+// ("...:free", ".../free") so configs do not have to set "free": true by hand.
+func isFreeTierModelID(modelID, raw string) bool {
+	for _, candidate := range []string{modelID, raw} {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate == "" {
+			continue
+		}
+		if strings.HasSuffix(candidate, ":free") ||
+			strings.HasSuffix(candidate, "/free") ||
+			strings.HasPrefix(candidate, "free/") {
+			return true
+		}
+	}
+	return false
 }
 
 func lookupModelConfigByRef(cfg *config.Config, raw string, defaultProvider ...string) *config.ModelConfig {

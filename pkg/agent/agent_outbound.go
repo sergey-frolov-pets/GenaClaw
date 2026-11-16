@@ -20,6 +20,28 @@ func (al *AgentLoop) maybePublishError(ctx context.Context, channel, chatID, ses
 	if errors.Is(err, context.Canceled) {
 		return false
 	}
+	// Full technical detail goes to the log only, never to the messenger.
+	logger.ErrorCF(
+		"agent",
+		"Message processing failed",
+		map[string]any{
+			"channel": channel,
+			"chat_id": chatID,
+			"error":   err.Error(),
+		},
+	)
+
+	chatKey := channel + "|" + chatID
+	if !shouldNotifyError(chatKey) {
+		// The user already saw a notice recently; clear the placeholder and stay quiet.
+		if al.channelManager != nil && channel != "" && chatID != "" {
+			dismissCtx, dismissCancel := context.WithTimeout(ctx, 5*time.Second)
+			al.channelManager.DismissPlaceholder(dismissCtx, channel, chatID)
+			dismissCancel()
+		}
+		return false
+	}
+
 	al.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, formatProcessingError(err))
 	return true
 }

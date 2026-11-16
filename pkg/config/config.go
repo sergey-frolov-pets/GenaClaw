@@ -810,6 +810,12 @@ type ModelConfig struct {
 
 	APIKeys SecureStrings `json:"api_keys,omitzero" yaml:"api_keys,omitempty"` // API authentication keys (multiple keys for failover)
 
+	// Free marks this entry as a free-tier model (or a model that ends with
+	// ":free"). When a free model reports a rate-limit/quota error, the fallback
+	// chain stops calling it until the daily quota reset instead of retrying it
+	// on every turn.
+	Free bool `json:"free,omitempty" yaml:"free,omitempty"`
+
 	// Enabled indicates whether this model entry is active. When omitted in
 	// existing configs, the field is inferred during load: models with API keys
 	// or the reserved "local-model" name are auto-enabled.
