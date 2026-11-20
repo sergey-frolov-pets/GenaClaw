@@ -1039,3 +1039,226 @@ func newTestPicoWebSocket(t *testing.T) (*websocket.Conn, <-chan PicoMessage, fu
 	defer resp.Body.Close()
 	return clientConn, received, cleanup
 }
+
+func newTestPicoChannelWithQuery(t *testing.T) *PicoChannel {
+	t.Helper()
+
+	bc := &config.Channel{Type: config.ChannelPico, Enabled: true}
+	cfg := &config.PicoSettings{AllowTokenQuery: true}
+	cfg.SetToken("test-token")
+	ch, err := NewPicoChannel(bc, cfg, bus.NewMessageBus())
+	if err != nil {
+		t.Fatalf("NewPicoChannel: %v", err)
+	}
+	return ch
+}
+
+func dialTestPicoWS(t *testing.T, ch *PicoChannel, sessionID string) (*websocket.Conn, func()) {
+	t.Helper()
+	if err := ch.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	srv := httptest.NewServer(ch)
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/pico/ws?session_id=" + sessionID + "&token=test-token"
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		srv.Close()
+		t.Fatalf("Dial() error = %v", err)
+	}
+	if resp != nil && resp.Body != nil {
+		defer resp.Body.Close()
+	}
+	cleanup := func() {
+		conn.Close()
+		srv.Close()
+		_ = ch.Stop(context.Background())
+	}
+	return conn, cleanup
+}
+
+func readTestPicoMessage(t *testing.T, conn *websocket.Conn) PicoMessage {
+	t.Helper()
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	var msg PicoMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		t.Fatalf("ReadJSON() error = %v", err)
+	}
+	return msg
+}
+
+func TestCancelFrame_ActiveTurnPublishesQuietStop(t *testing.T) {
+	msgBus := bus.NewMessageBus()
+	bc := &config.Channel{Type: config.ChannelPico, Enabled: true}
+	cfg := &config.PicoSettings{AllowTokenQuery: true}
+	cfg.SetToken("test-token")
+	ch, err := NewPicoChannel(bc, cfg, msgBus)
+	if err != nil {
+		t.Fatalf("NewPicoChannel: %v", err)
+	}
+	conn, cleanup := dialTestPicoWS(t, ch, "sess-cancel")
+	defer cleanup()
+
+	ch.setTypingActive("sess-cancel", true)
+
+	if err := conn.WriteJSON(PicoMessage{Type: TypeCancel, ID: "req-1"}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+
+	ack := readTestPicoMessage(t, conn)
+	if ack.Type != TypeCancel {
+		t.Fatalf("ack type = %q, want %q", ack.Type, TypeCancel)
+	}
+	if got := ack.Payload["accepted"]; got != true {
+		t.Fatalf("accepted = %#v, want true", got)
+	}
+
+	select {
+	case inbound := <-msgBus.InboundChan():
+		if inbound.Content != "/stop" {
+			t.Fatalf("inbound content = %q, want /stop", inbound.Content)
+		}
+		if inbound.ChatID != "pico:sess-cancel" {
+			t.Fatalf("inbound chat = %q, want pico:sess-cancel", inbound.ChatID)
+		}
+		if got := inbound.Context.Raw[bus.RawQuietKey]; got != "true" {
+			t.Fatalf("quiet raw = %q, want true", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected quiet /stop inbound message")
+	}
+}
+
+func TestCancelFrame_NoActiveTurnOnlyAcks(t *testing.T) {
+	ch := newTestPicoChannelWithQuery(t)
+	conn, cleanup := dialTestPicoWS(t, ch, "sess-idle")
+	defer cleanup()
+
+	if err := conn.WriteJSON(PicoMessage{Type: TypeCancel, ID: "req-2"}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+
+	ack := readTestPicoMessage(t, conn)
+	if ack.Type != TypeCancel {
+		t.Fatalf("ack type = %q, want %q", ack.Type, TypeCancel)
+	}
+	if got := ack.Payload["accepted"]; got != false {
+		t.Fatalf("accepted = %#v, want false", got)
+	}
+	if got := ack.Payload["reason"]; got != "no_active_turn" {
+		t.Fatalf("reason = %#v, want no_active_turn", got)
+	}
+}
+
+func TestTurnResume_ReplaysFramesAfterSince(t *testing.T) {
+	ch := newTestPicoChannelWithQuery(t)
+	ch.recordReplay("sess-resume", PicoMessage{
+		Type:      TypeMessageCreate,
+		Timestamp: 1000,
+		Payload:   map[string]any{PayloadKeyContent: "first", "message_id": "m1"},
+	})
+	ch.recordReplay("sess-resume", PicoMessage{
+		Type:      TypeMessageCreate,
+		Timestamp: 2000,
+		Payload:   map[string]any{PayloadKeyContent: "second", "message_id": "m2"},
+	})
+
+	conn, cleanup := dialTestPicoWS(t, ch, "sess-resume")
+	defer cleanup()
+
+	if err := conn.WriteJSON(PicoMessage{
+		Type:    TypeTurnResume,
+		ID:      "resume-1",
+		Payload: map[string]any{"since": 1500},
+	}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+
+	resp := readTestPicoMessage(t, conn)
+	if resp.Type != TypeTurnResume {
+		t.Fatalf("resp type = %q, want %q", resp.Type, TypeTurnResume)
+	}
+	frames, ok := resp.Payload["frames"].([]any)
+	if !ok {
+		t.Fatalf("frames payload = %#v, want array", resp.Payload["frames"])
+	}
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want 1", len(frames))
+	}
+	frame, ok := frames[0].(map[string]any)
+	if !ok {
+		t.Fatalf("frame = %#v, want object", frames[0])
+	}
+	payload, _ := frame["payload"].(map[string]any)
+	if got := payload[PayloadKeyContent]; got != "second" {
+		t.Fatalf("frame content = %#v, want second", got)
+	}
+	if got := resp.Payload["latest"]; got != float64(2000) {
+		t.Fatalf("latest = %#v, want 2000", got)
+	}
+	if got := resp.Payload["active"]; got != false {
+		t.Fatalf("active = %#v, want false", got)
+	}
+}
+
+func TestTurnResume_ReportsActiveTurn(t *testing.T) {
+	ch := newTestPicoChannelWithQuery(t)
+	ch.setTypingActive("sess-active", true)
+
+	conn, cleanup := dialTestPicoWS(t, ch, "sess-active")
+	defer cleanup()
+
+	if err := conn.WriteJSON(PicoMessage{Type: TypeMessageHistory, ID: "hist-1"}); err != nil {
+		t.Fatalf("WriteJSON() error = %v", err)
+	}
+
+	resp := readTestPicoMessage(t, conn)
+	if resp.Type != TypeMessageHistory {
+		t.Fatalf("resp type = %q, want %q", resp.Type, TypeMessageHistory)
+	}
+	if got := resp.Payload["active"]; got != true {
+		t.Fatalf("active = %#v, want true", got)
+	}
+}
+
+func TestBroadcastToSession_RecordsReplayWithoutConnections(t *testing.T) {
+	ch := newTestPicoChannel(t)
+
+	msg := newMessage(TypeMessageCreate, map[string]any{
+		PayloadKeyContent: "offline answer",
+		"message_id":      "m-offline",
+	})
+	if err := ch.broadcastToSession("pico:sess-offline", msg); err == nil {
+		t.Fatal("expected no active connections error")
+	}
+
+	frames, latest := ch.replaySince("sess-offline", 0, 0)
+	if len(frames) != 1 {
+		t.Fatalf("frames = %d, want 1", len(frames))
+	}
+	if latest == 0 {
+		t.Fatal("expected non-zero latest timestamp")
+	}
+	if got := frames[0].Payload[PayloadKeyContent]; got != "offline answer" {
+		t.Fatalf("frame content = %#v, want offline answer", got)
+	}
+}
+
+func TestRecordReplay_TrimsToMaxFrames(t *testing.T) {
+	ch := newTestPicoChannel(t)
+
+	for i := 0; i < replayMaxFrames+25; i++ {
+		ch.recordReplay("sess-trim", PicoMessage{
+			Type:      TypeMessageUpdate,
+			Timestamp: int64(i + 1),
+			Payload:   map[string]any{PayloadKeyContent: "x"},
+		})
+	}
+
+	frames, _ := ch.replaySince("sess-trim", 0, replayMaxFrames*2)
+	if len(frames) != replayMaxFrames {
+		t.Fatalf("frames = %d, want %d", len(frames), replayMaxFrames)
+	}
+	if frames[0].Timestamp != 26 {
+		t.Fatalf("first frame ts = %d, want 26", frames[0].Timestamp)
+	}
+}

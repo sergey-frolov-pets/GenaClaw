@@ -12,6 +12,10 @@ type SenderInfo struct {
 // InboundContext captures the normalized, platform-agnostic facts about an
 // inbound message. This is the source of truth for routing and session
 // allocation.
+// RawQuietKey marks an inbound message as a service command: it must not
+// produce a user-visible reply or chat decorations (typing, placeholder).
+const RawQuietKey = "quiet"
+
 type InboundContext struct {
 	Channel string `json:"channel"`
 	Account string `json:"account,omitempty"`

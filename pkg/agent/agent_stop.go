@@ -45,8 +45,19 @@ func (al *AgentLoop) tryHandleStopCommand(
 		al.channelManager.InvokeTypingStop(msg.Channel, msg.ChatID)
 	}
 	al.resetMessageToolRound(sessionKey)
-	al.PublishResponseIfNeeded(ctx, msg.Channel, msg.ChatID, sessionKey, reply)
+	if !inboundIsQuiet(msg) {
+		al.PublishResponseIfNeeded(ctx, msg.Channel, msg.ChatID, sessionKey, reply)
+	}
 	return true
+}
+
+// inboundIsQuiet reports whether the inbound message is a service command that
+// must not produce a user-visible reply (e.g. the pico cancel frame).
+func inboundIsQuiet(msg bus.InboundMessage) bool {
+	if len(msg.Context.Raw) == 0 {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(msg.Context.Raw[bus.RawQuietKey]), "true")
 }
 
 func (al *AgentLoop) stopActiveTurnForSession(sessionKey string) (commands.StopResult, error) {

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -107,6 +108,152 @@ type PicoChannel struct {
 	deleteMessageFn    func(context.Context, string, string) error
 	// broadcastFn lets tests intercept outbound broadcasts. nil → broadcastToSession.
 	broadcastFn func(chatID string, msg PicoMessage) error
+
+	// replay keeps the most recent outbound frames per session so a client
+	// that reconnects can catch up via turn.resume instead of resending.
+	replayMu sync.Mutex
+	replay   map[string]*sessionReplay
+
+	// typingActive mirrors the typing indicator state per session. It is used
+	// to tell a reconnecting client whether a turn is still running.
+	typingMu     sync.Mutex
+	typingActive map[string]bool
+}
+
+const (
+	replayMaxFrames = 200
+	replayMaxBytes  = 2 << 20 // 2 MiB per session
+	replayTTL       = 6 * time.Hour
+)
+
+type replayFrame struct {
+	msg   PicoMessage
+	bytes int
+}
+
+type sessionReplay struct {
+	frames []replayFrame
+	bytes  int
+	lastAt time.Time
+}
+
+// replayableType reports whether an outbound frame is part of the transcript
+// that matters for catching up after a reconnect.
+func replayableType(msgType string) bool {
+	switch msgType {
+	case TypeMessageCreate, TypeMessageUpdate, TypeMessageDelete, TypeMediaCreate:
+		return true
+	}
+	return false
+}
+
+func estimateFrameBytes(msg PicoMessage) int {
+	size := len(msg.Type) + len(msg.ID) + len(msg.SessionID) + 64
+	if content, ok := msg.Payload[PayloadKeyContent].(string); ok {
+		size += len(content)
+	}
+	if ui, ok := msg.Payload[PayloadKeyUI]; ok {
+		if raw, err := json.Marshal(ui); err == nil {
+			size += len(raw)
+		}
+	}
+	if tc, ok := msg.Payload[PayloadKeyToolCalls]; ok {
+		if raw, err := json.Marshal(tc); err == nil {
+			size += len(raw)
+		}
+	}
+	return size
+}
+
+// recordReplay stores the frame for the session, trimming the oldest ones.
+func (c *PicoChannel) recordReplay(sessionID string, msg PicoMessage) {
+	if sessionID == "" || !replayableType(msg.Type) {
+		return
+	}
+	size := estimateFrameBytes(msg)
+
+	c.replayMu.Lock()
+	defer c.replayMu.Unlock()
+	if c.replay == nil {
+		c.replay = make(map[string]*sessionReplay)
+	}
+	c.pruneReplayLocked(time.Now())
+
+	buf := c.replay[sessionID]
+	if buf == nil {
+		buf = &sessionReplay{}
+		c.replay[sessionID] = buf
+	}
+	buf.frames = append(buf.frames, replayFrame{msg: msg, bytes: size})
+	buf.bytes += size
+	buf.lastAt = time.Now()
+
+	for len(buf.frames) > replayMaxFrames || (buf.bytes > replayMaxBytes && len(buf.frames) > 1) {
+		buf.bytes -= buf.frames[0].bytes
+		buf.frames = buf.frames[1:]
+	}
+}
+
+// pruneReplayLocked drops expired sessions. Caller must hold replayMu.
+func (c *PicoChannel) pruneReplayLocked(now time.Time) {
+	for sessionID, buf := range c.replay {
+		if buf == nil || now.Sub(buf.lastAt) > replayTTL {
+			delete(c.replay, sessionID)
+		}
+	}
+}
+
+// replaySince returns the recorded frames after the given timestamp.
+func (c *PicoChannel) replaySince(sessionID string, since int64, limit int) ([]PicoMessage, int64) {
+	if limit <= 0 {
+		limit = replayMaxFrames
+	}
+	if limit > replayMaxFrames {
+		limit = replayMaxFrames
+	}
+
+	c.replayMu.Lock()
+	defer c.replayMu.Unlock()
+	c.pruneReplayLocked(time.Now())
+
+	buf := c.replay[sessionID]
+	if buf == nil {
+		return []PicoMessage{}, 0
+	}
+
+	frames := make([]PicoMessage, 0, limit)
+	var latest int64
+	for _, frame := range buf.frames {
+		if frame.msg.Timestamp > latest {
+			latest = frame.msg.Timestamp
+		}
+		if since > 0 && frame.msg.Timestamp <= since {
+			continue
+		}
+		frames = append(frames, frame.msg)
+	}
+	if len(frames) > limit {
+		frames = frames[len(frames)-limit:]
+	}
+	return frames, latest
+}
+
+func (c *PicoChannel) setTypingActive(sessionID string, active bool) {
+	if sessionID == "" {
+		return
+	}
+	c.typingMu.Lock()
+	defer c.typingMu.Unlock()
+	if c.typingActive == nil {
+		c.typingActive = make(map[string]bool)
+	}
+	c.typingActive[sessionID] = active
+}
+
+func (c *PicoChannel) isTypingActive(sessionID string) bool {
+	c.typingMu.Lock()
+	defer c.typingMu.Unlock()
+	return c.typingActive[sessionID]
 }
 
 // NewPicoChannel creates a new Pico Protocol channel.
@@ -485,7 +632,10 @@ func (c *PicoChannel) StartTyping(ctx context.Context, chatID string) (func(), e
 	if err := c.broadcastToSession(chatID, startMsg); err != nil {
 		return func() {}, err
 	}
+	sessionID := strings.TrimPrefix(chatID, "pico:")
+	c.setTypingActive(sessionID, true)
 	return func() {
+		c.setTypingActive(sessionID, false)
 		stopMsg := newMessage(TypeTypingStop, nil)
 		c.broadcastToSession(chatID, stopMsg)
 	}, nil
@@ -988,6 +1138,10 @@ func (c *PicoChannel) broadcastToSession(chatID string, msg PicoMessage) error {
 	sessionID := strings.TrimPrefix(chatID, "pico:")
 	msg.SessionID = sessionID
 
+	// Keep the frame for turn.resume before delivery: the client may be
+	// disconnected right now and catch up after reconnecting.
+	c.recordReplay(sessionID, msg)
+
 	var sent bool
 	for _, pc := range c.sessionConnectionsSnapshot(sessionID) {
 		if err := pc.writeJSON(msg); err != nil {
@@ -1211,6 +1365,12 @@ func (c *PicoChannel) handleMessage(pc *picoConn, msg PicoMessage) {
 	case TypeMediaSend:
 		c.handleMessageSend(pc, msg)
 
+	case TypeCancel:
+		c.handleCancel(pc, msg)
+
+	case TypeTurnResume, TypeMessageHistory:
+		c.handleTurnResume(pc, msg)
+
 	default:
 		errMsg := newError("unknown_type", fmt.Sprintf("unknown message type: %s", msg.Type))
 		pc.writeJSON(errMsg)
@@ -1277,6 +1437,128 @@ func (c *PicoChannel) handleMessageSend(pc *picoConn, msg PicoMessage) {
 	}
 
 	c.HandleInboundContext(c.ctx, chatID, content, media, inboundCtx, sender)
+}
+
+// handleCancel aborts the active turn for the connection's session.
+// It never renders anything in the chat: the stop command is marked quiet, so
+// the agent suppresses its "task stopped" reply and only typing.stop is sent.
+func (c *PicoChannel) handleCancel(pc *picoConn, msg PicoMessage) {
+	sessionID := pc.sessionID
+	if requested := strings.TrimSpace(msg.SessionID); requested != "" && requested != sessionID {
+		pc.writeJSON(newErrorWithPayload("invalid_session", "session_id does not match the connection", map[string]any{
+			"request_id": msg.ID,
+		}))
+		return
+	}
+
+	active := c.isTypingActive(sessionID)
+	ack := newMessage(TypeCancel, map[string]any{
+		"request_id": msg.ID,
+		"accepted":   active,
+		"session_id": sessionID,
+	})
+	if active {
+		ack.Payload["reason"] = "cancel_requested"
+	} else {
+		ack.Payload["reason"] = "no_active_turn"
+	}
+	pc.writeJSON(ack)
+
+	if !active {
+		return
+	}
+
+	go c.publishQuietStop(sessionID, msg.ID)
+}
+
+// publishQuietStop injects a /stop command for the session without any chat
+// decorations (typing indicator or placeholder) and without a visible reply.
+func (c *PicoChannel) publishQuietStop(sessionID, requestID string) {
+	ctx := c.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	chatID := "pico:" + sessionID
+	senderID := "pico-user"
+	sender := bus.SenderInfo{
+		Platform:    "pico",
+		PlatformID:  senderID,
+		CanonicalID: identity.BuildCanonicalID("pico", senderID),
+	}
+	if !c.IsAllowedSender(sender) {
+		return
+	}
+
+	inboundCtx := bus.InboundContext{
+		Channel:   "pico",
+		ChatID:    chatID,
+		ChatType:  "direct",
+		SenderID:  senderID,
+		MessageID: requestID,
+		Raw: map[string]string{
+			"platform":          "pico",
+			"session_id":        sessionID,
+			bus.RawQuietKey:     "true",
+			"cancel_request_id": requestID,
+		},
+	}
+
+	if err := c.HandleInboundContext(ctx, chatID, "/stop", nil, inboundCtx, sender); err != nil {
+		logger.WarnCF("pico", "Failed to publish cancel command", map[string]any{
+			"session_id": sessionID,
+			"error":      err.Error(),
+		})
+	}
+}
+
+// handleTurnResume returns the outbound frames a reconnecting client missed.
+// The reply type mirrors the request type (turn.resume or message.history).
+func (c *PicoChannel) handleTurnResume(pc *picoConn, msg PicoMessage) {
+	sessionID := pc.sessionID
+	since := payloadInt64(msg.Payload, "since")
+	limit := int(payloadInt64(msg.Payload, "limit"))
+
+	frames, latest := c.replaySince(sessionID, since, limit)
+	resp := newMessage(msg.Type, map[string]any{
+		"since":    since,
+		"frames":   frames,
+		"latest":   latest,
+		"active":   c.isTypingActive(sessionID),
+		"returned": len(frames),
+	})
+	resp.ID = msg.ID
+	pc.writeJSON(resp)
+}
+
+func payloadInt64(payload map[string]any, key string) int64 {
+	if len(payload) == 0 {
+		return 0
+	}
+	switch value := payload[key].(type) {
+	case nil:
+		return 0
+	case float64:
+		return int64(value)
+	case int64:
+		return value
+	case int:
+		return int64(value)
+	case json.Number:
+		parsed, err := value.Int64()
+		if err != nil {
+			return 0
+		}
+		return parsed
+	case string:
+		parsed, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if err != nil {
+			return 0
+		}
+		return parsed
+	default:
+		return 0
+	}
 }
 
 // truncate truncates a string to maxLen runes.

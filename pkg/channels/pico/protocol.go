@@ -11,6 +11,14 @@ const (
 	TypeMessageSend = "message.send"
 	TypeMediaSend   = "media.send"
 	TypePing        = "ping"
+	// TypeCancel asks the server to abort the active turn for the connection's
+	// session. The server replies with the same type and an "accepted" flag.
+	TypeCancel = "cancel"
+	// TypeTurnResume is sent by a client that reconnected and wants the frames
+	// it missed. The server replies with the same type and a list of frames.
+	TypeTurnResume = "turn.resume"
+	// TypeMessageHistory is an alias of turn.resume kept for protocol docs.
+	TypeMessageHistory = "message.history"
 
 	// TypeMessageCreate is sent from server to client.
 	TypeMessageCreate = "message.create"

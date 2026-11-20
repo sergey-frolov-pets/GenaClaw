@@ -318,7 +318,8 @@ func (c *BaseChannel) HandleMessageWithContext(
 	// If streaming actually activates, preSend will skip the placeholder edit (streamActive map)
 	// and the typing stop will still be called. This avoids the problem of compile-time interface
 	// checks incorrectly skipping indicators when streaming may not work at runtime.
-	if c.owner != nil && c.placeholderRecorder != nil {
+	quiet := strings.EqualFold(strings.TrimSpace(inboundCtx.Raw[bus.RawQuietKey]), "true")
+	if c.owner != nil && c.placeholderRecorder != nil && !quiet {
 		// Typing
 		if tc, ok := c.owner.(TypingCapable); ok {
 			if stop, err := tc.StartTyping(ctx, deliveryChatID); err == nil {
