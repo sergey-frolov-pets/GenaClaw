@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -180,9 +181,9 @@ func (c *Channel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ChatType:  "direct",
 		SenderID:  userID,
 		MessageID: fmt.Sprintf("%d", req.Session.MessageID),
-		Raw: map[string]any{
+		Raw: map[string]string{
 			"session_id":  req.Session.SessionID,
-			"new_session": req.Session.New,
+			"new_session": strconv.FormatBool(req.Session.New),
 		},
 	}
 
