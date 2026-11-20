@@ -784,6 +784,14 @@ Normal summary policy:
 - Preserve key decisions, rationale, constraints, and active tasks.
 - Keep essential technical details needed to continue work safely.
 - Remove obvious repetition and conversational filler.
+- Preserve durable facts VERBATIM and do not paraphrase them: numbers, amounts,
+  percentages, rates, dates, deadlines, IDs, version numbers, hostnames, URLs,
+  file paths, command lines, config keys, and proper names. If a fact is precise,
+  keep it precise.
+- Keep technical terms, identifiers, and code symbols exactly as written; do not
+  translate or rename them.
+- Keep the current state of open questions, unresolved problems, and pending
+  TODOs — a future turn must be able to resume work from the summary alone.
 
 Output requirements:
 - Plain text only.
@@ -806,6 +814,11 @@ func buildCondensedSummaryPrompt(sourceText string, targetTokens int) string {
 	return fmt.Sprintf(`You condense multiple summaries into a single higher-level summary.
 Preserve all important decisions, constraints, and outcomes.
 Merge overlapping topics. Keep technical details intact.
+- Preserve durable facts VERBATIM: numbers, amounts, percentages, rates, dates,
+  deadlines, IDs, versions, hostnames, URLs, file paths, command lines, config
+  keys, and proper names. Do not round, approximate, or paraphrase precise facts.
+- Keep technical terms, identifiers, and code symbols exactly as written.
+- Keep open questions, unresolved problems, and pending TODOs so work can resume.
 
 Output requirements:
 - Plain text only.
@@ -828,6 +841,10 @@ Aggressive summary policy:
 - Keep only durable facts and current task state.
 - Remove examples, repetition, and low-value narrative details.
 - Preserve explicit TODOs, blockers, decisions, and constraints.
+- Keep precise facts VERBATIM (numbers, rates, dates, IDs, versions, file paths,
+  command lines, config keys, proper names) — drop the narrative around them,
+  not the facts themselves.
+- Keep technical terms and identifiers exactly as written.
 
 Output requirements:
 - Plain text only.

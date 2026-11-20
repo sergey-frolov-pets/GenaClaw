@@ -29,6 +29,7 @@ const (
 	PayloadKeyToolCalls   = "tool_calls"
 	PayloadKeyModelName   = "model_name"
 	PayloadKeyUsage       = "usage"
+	PayloadKeyUI          = "ui"
 
 	MessageKindThought   = "thought"
 	MessageKindToolCalls = "tool_calls"

@@ -48,6 +48,12 @@ type ChannelManager interface {
 	// SendPlaceholder sends a placeholder message (e.g., for audio transcription).
 	SendPlaceholder(ctx context.Context, channel, chatID string) bool
 
+	// DismissPlaceholder deletes any pending placeholder (e.g. "Thinking…")
+	// registered for the given channel/chat without editing it to a final
+	// response. Used when a turn ends without producing a visible response.
+	// Safe to call when no placeholder is registered (no-op).
+	DismissPlaceholder(ctx context.Context, channel, chatID string)
+
 	// DismissToolFeedback clears any tracked tool feedback animation for the
 	// given channel/chat. Call this when a turn ends without a final response
 	// (e.g., ResponseHandled tools) to avoid orphaned animation goroutines.

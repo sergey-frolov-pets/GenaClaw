@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"sync"
@@ -87,6 +88,8 @@ type turnResult struct {
 	modelName    string
 	status       TurnEndStatus
 	followUps    []bus.InboundMessage
+	// uiPayload is the interactive card block cut off the final text, if any.
+	uiPayload json.RawMessage
 }
 
 // =============================================================================
@@ -125,6 +128,10 @@ type turnExecution struct {
 
 	// Iteration tracking
 	iteration int
+
+	// Total tool calls executed so far in this turn (across all iterations).
+	// Used to enforce AgentInstance.MaxToolCalls when > 0.
+	toolCallCount int
 
 	// Per-iteration state set by Pipeline.PreLLM
 	activeCandidates  []providers.FallbackCandidate
@@ -216,6 +223,9 @@ type turnState struct {
 	iteration    int
 	startedAt    time.Time
 	finalContent string
+	// uiPayload holds a card block seen in an intermediate assistant message.
+	// It is used by the final answer when the last message has no block.
+	uiPayload json.RawMessage
 
 	followUps []bus.InboundMessage
 
@@ -421,6 +431,26 @@ func (ts *turnState) finalContentSnapshot() string {
 	ts.mu.RLock()
 	defer ts.mu.RUnlock()
 	return ts.finalContent
+}
+
+// setPendingUI remembers a card block that appeared in an intermediate
+// assistant message, so the final answer can still deliver it.
+func (ts *turnState) setPendingUI(ui json.RawMessage) {
+	if len(ui) == 0 {
+		return
+	}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.uiPayload = append(json.RawMessage(nil), ui...)
+}
+
+// takePendingUI returns the remembered block and clears it.
+func (ts *turnState) takePendingUI() json.RawMessage {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ui := ts.uiPayload
+	ts.uiPayload = nil
+	return ui
 }
 
 func (ts *turnState) recordToolKind(tool string) {

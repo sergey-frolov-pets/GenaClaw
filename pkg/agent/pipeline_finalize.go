@@ -23,6 +23,13 @@ func (p *Pipeline) Finalize(
 ) (turnResult, error) {
 	al := p.al
 
+	// Cut the interactive card block off the final text exactly once, before it
+	// reaches history, summarization, streaming or any outbound channel.
+	finalContent, ui := extractUI(finalContent)
+	if len(ui) == 0 {
+		ui = ts.takePendingUI()
+	}
+
 	// When allResponsesHandled=true, ExecuteTools already finalized
 	// (added handledToolResponseSummary, saved session, set phase to Completed).
 	// But still check for hard abort - if requested, abort the turn.
@@ -36,6 +43,7 @@ func (p *Pipeline) Finalize(
 			modelName:    exec.llmModelName,
 			status:       turnStatus,
 			followUps:    append([]bus.InboundMessage(nil), ts.followUps...),
+			uiPayload:    ui,
 		}, nil
 	}
 
@@ -77,13 +85,14 @@ func (p *Pipeline) Finalize(
 	}
 
 	contextUsage := computeContextUsage(ts.agent, ts.sessionKey)
-	streamErr := finalizeConfiguredStreamingLLM(turnCtx, ts, exec, finalContent, contextUsage)
+	streamErr := finalizeConfiguredStreamingLLM(turnCtx, ts, exec, finalContent, ui, contextUsage)
 	// If streaming never became visible, keep the legacy Pico interim publish path
 	// so the final answer is still delivered outside normal SendResponse.
 	if ((streamErr != nil && !isConfiguredStreamingVisibleError(streamErr)) || exec.streamingFallback) &&
 		!ts.opts.SendResponse && ts.opts.AllowInterimPicoPublish && finalContent != "" {
 		msg := outboundMessageForTurnWithOptions(ts, finalContent, outboundTurnMessageOptions{
 			modelName: exec.llmModelName,
+			raw:       rawWithUI(nil, ui),
 		})
 		msg.ContextUsage = contextUsage
 		markFinalOutbound(&msg)
@@ -95,6 +104,7 @@ func (p *Pipeline) Finalize(
 			finalContent: finalContent,
 			status:       TurnEndStatusError,
 			followUps:    append([]bus.InboundMessage(nil), ts.followUps...),
+			uiPayload:    ui,
 		}, streamErr
 	}
 	ts.setPhase(TurnPhaseCompleted)
@@ -103,5 +113,6 @@ func (p *Pipeline) Finalize(
 		modelName:    exec.llmModelName,
 		status:       turnStatus,
 		followUps:    append([]bus.InboundMessage(nil), ts.followUps...),
+		uiPayload:    ui,
 	}, nil
 }

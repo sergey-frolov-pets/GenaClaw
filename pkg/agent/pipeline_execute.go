@@ -129,6 +129,49 @@ toolLoop:
 			return ToolControlBreak
 		}
 
+		// Tool-call budget: hard cap on total tool calls per turn (across all
+		// iterations). When exceeded, stop executing and tell the LLM why, so it
+		// can wrap up. 0 = unlimited (only MaxToolIterations applies).
+		if maxCalls := ts.agent.MaxToolCalls; maxCalls > 0 && exec.toolCallCount >= maxCalls {
+			budgetMsg := fmt.Sprintf(
+				"Tool-call budget exhausted: reached max_tool_calls=%d for this turn. "+
+					"Wrap up with a final answer using the results you already have.", maxCalls)
+			// Answer every remaining tool call so the provider message stream stays
+			// well-formed (each tool_call_id must have a matching tool message).
+			for j := i; j < len(normalizedToolCalls); j++ {
+				skippedTC := normalizedToolCalls[j]
+				budgetResult := providers.Message{
+					Role:       "tool",
+					Content:    budgetMsg,
+					ToolCallID: skippedTC.ID,
+				}
+				messages = append(messages, budgetResult)
+				if !ts.opts.NoHistory {
+					ts.agent.Sessions.AddFullMessage(ts.sessionKey, budgetResult)
+					ts.recordPersistedMessage(budgetResult)
+				}
+			}
+			exec.messages = messages
+			exec.allResponsesHandled = false
+			al.emitEvent(
+				runtimeevents.KindAgentToolExecSkipped,
+				ts.eventMeta("runTurn", "turn.tool.skipped"),
+				ToolExecSkippedPayload{
+					Tool:   tc.Name,
+					Reason: budgetMsg,
+				},
+			)
+			logger.WarnCF("agent", "Tool-call budget exhausted; ending tool execution",
+				map[string]any{
+					"agent_id":  ts.agent.ID,
+					"iteration": iteration,
+					"max_calls": maxCalls,
+					"executed":  exec.toolCallCount,
+					"remaining": len(normalizedToolCalls) - i,
+				})
+			return ToolControlBreak
+		}
+
 		toolName := tc.Name
 		toolArgs := cloneStringAnyMap(tc.Arguments)
 		denyByTurnProfile := func() bool {
@@ -178,6 +221,7 @@ toolLoop:
 			case HookActionRespond:
 				if toolReq != nil && toolReq.HookResult != nil {
 					hookResult := toolReq.HookResult
+					exec.toolCallCount++
 
 					argsJSON, _ := json.Marshal(toolArgs)
 					argsPreview := utils.Truncate(string(argsJSON), 200)
@@ -567,6 +611,7 @@ toolLoop:
 			ts.sessionKey,
 			ts.opts.Dispatch.SessionScope,
 		)
+		exec.toolCallCount++
 		toolResult := ts.agent.Tools.ExecuteWithContext(
 			execCtx,
 			toolName,

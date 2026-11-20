@@ -399,14 +399,6 @@ func filterReasoningReplayMessages(messages []Message) []Message {
 }
 
 func filterReasoningReplayTurn(messages []Message) []Message {
-	hasToolInteraction := false
-	for _, msg := range messages {
-		if msg.Role == "tool" || (msg.Role == "assistant" && len(msg.ToolCalls) > 0) {
-			hasToolInteraction = true
-			break
-		}
-	}
-
 	out := make([]Message, 0, len(messages))
 	for _, msg := range messages {
 		if messageutil.IsTransientAssistantThoughtMessage(msg) {
@@ -414,13 +406,11 @@ func filterReasoningReplayTurn(messages []Message) []Message {
 		}
 
 		cloned := msg
-		// DeepSeek and MiMo only require reasoning_content replay for turns
-		// that participate in a tool interaction round. For plain assistant
-		// turns between two user messages, the reasoning trace is ignored on
-		// replay, so we strip it here.
-		if cloned.Role == "assistant" && strings.TrimSpace(cloned.ReasoningContent) != "" && !hasToolInteraction {
-			cloned.ReasoningContent = ""
-		}
+		// DeepSeek (thinking mode) and MiMo require reasoning_content to be
+		// replayed for every assistant message that originally carried it.
+		// Dropping it for plain (non-tool) assistant turns triggers HTTP 400
+		// ("reasoning_content is required in the thinking mode must be passed
+		// back to the API"), so reasoning is preserved as-is here.
 		if assistantMessageEmpty(cloned) {
 			continue
 		}

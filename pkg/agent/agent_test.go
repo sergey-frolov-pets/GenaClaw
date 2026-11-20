@@ -85,6 +85,9 @@ func (m *recordingChannelManager) SendPlaceholder(ctx context.Context, channel, 
 	return false
 }
 
+func (m *recordingChannelManager) DismissPlaceholder(ctx context.Context, channel, chatID string) {
+}
+
 func (m *recordingChannelManager) DismissToolFeedback(
 	ctx context.Context, channel, chatID string, outboundCtx *bus.InboundContext,
 ) {

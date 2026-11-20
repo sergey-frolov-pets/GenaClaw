@@ -30,6 +30,7 @@ type AgentInstance struct {
 	Fallbacks                 []string
 	Workspace                 string
 	MaxIterations             int
+	MaxToolCalls              int
 	MaxTokens                 int
 	Temperature               float64
 	ThinkingLevel             ThinkingLevel
@@ -194,6 +195,8 @@ func NewAgentInstance(
 		maxIter = 20
 	}
 
+	maxToolCalls := defaults.MaxToolCalls // 0 = unlimited (only iteration cap applies)
+
 	maxTokens := defaults.MaxTokens
 	if maxTokens == 0 {
 		maxTokens = 8192
@@ -328,6 +331,7 @@ func NewAgentInstance(
 		Fallbacks:                 fallbacks,
 		Workspace:                 workspace,
 		MaxIterations:             maxIter,
+		MaxToolCalls:              maxToolCalls,
 		MaxTokens:                 maxTokens,
 		Temperature:               temperature,
 		ThinkingLevel:             thinkingLevel,

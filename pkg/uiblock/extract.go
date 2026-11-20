@@ -71,12 +71,14 @@ func Extract(text string) Result {
 	}
 
 	segments, blocks := splitFences(text)
+	if len(blocks) == 0 {
+		// The word "gena-ui" appeared in prose, not as a fence: the text is
+		// not ours to reformat, return it byte for byte.
+		return Result{Clean: text}
+	}
 	clean := joinSegments(segments)
 
 	result := Result{Clean: clean}
-	if len(blocks) == 0 {
-		return result
-	}
 
 	last := blocks[len(blocks)-1]
 	if reason := Validate(last); reason != "" {

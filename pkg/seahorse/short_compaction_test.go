@@ -1036,3 +1036,58 @@ func TestCompactLeafAccumulatesUpToLeafChunkTokens(t *testing.T) {
 			summary.SourceMessageTokenCount, LeafChunkTokens)
 	}
 }
+
+// TestSummaryPromptsPreserveFacts guards the "don't lose facts" requirement:
+// all three summary prompts must instruct the model to keep precise facts
+// verbatim, not paraphrase technical terms, and preserve open questions/TODOs.
+func TestSummaryPromptsPreserveFacts(t *testing.T) {
+	leaf := buildLeafSummaryPrompt("src", "", 1200)
+	condensed := buildCondensedSummaryPrompt("src", 2000)
+	aggressive := buildAggressiveLeafSummaryPrompt("src", "", 640)
+
+	cases := []struct {
+		name   string
+		prompt string
+		want   []string
+	}{
+		{
+			name:   "leaf",
+			prompt: leaf,
+			want: []string{
+				"VERBATIM",
+				"file paths",
+				"open questions",
+				"Expand for details about:",
+				"Files: none",
+			},
+		},
+		{
+			name:   "condensed",
+			prompt: condensed,
+			want: []string{
+				"VERBATIM",
+				"file paths",
+				"open questions",
+				"Expand for details about:",
+			},
+		},
+		{
+			name:   "aggressive",
+			prompt: aggressive,
+			want: []string{
+				"VERBATIM",
+				"file paths",
+				"Expand for details about:",
+				"Files: none",
+			},
+		},
+	}
+
+	for _, c := range cases {
+		for _, w := range c.want {
+			if !contains(c.prompt, w) {
+				t.Errorf("%s prompt missing required fragment %q", c.name, w)
+			}
+		}
+	}
+}

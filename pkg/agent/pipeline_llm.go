@@ -652,9 +652,15 @@ func (p *Pipeline) CallLLM(
 		})
 
 	exec.allResponsesHandled = len(exec.normalizedToolCalls) > 0
+	// An intermediate assistant message may already carry the card block: strip
+	// it from history and keep it for the final answer.
+	assistantContent, assistantUI := extractUI(exec.response.Content)
+	if len(assistantUI) > 0 {
+		ts.setPendingUI(assistantUI)
+	}
 	assistantMsg := providers.Message{
 		Role:             "assistant",
-		Content:          exec.response.Content,
+		Content:          assistantContent,
 		ModelName:        exec.llmModelName,
 		ReasoningContent: reasoningContent,
 	}
@@ -701,7 +707,7 @@ func (p *Pipeline) CallLLM(
 			ts,
 			exec.llmModelName,
 			reasoningContent,
-			exec.response.Content,
+			assistantContent,
 			assistantMsg.ToolCalls,
 		)
 	}

@@ -433,6 +433,7 @@ type AgentDefaults struct {
 	ContextWindow             int                `json:"context_window,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_CONTEXT_WINDOW"`
 	Temperature               *float64           `json:"temperature,omitempty"            env:"PICOCLAW_AGENTS_DEFAULTS_TEMPERATURE"`
 	MaxToolIterations         int                `json:"max_tool_iterations"              env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_ITERATIONS"`
+	MaxToolCalls              int                `json:"max_tool_calls,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_TOOL_CALLS"` // Hard cap on total tool calls per turn (across iterations). 0 = unlimited (fall back to MaxToolIterations only).
 	SummarizeMessageThreshold int                `json:"summarize_message_threshold"      env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_MESSAGE_THRESHOLD"`
 	SummarizeTokenPercent     int                `json:"summarize_token_percent"          env:"PICOCLAW_AGENTS_DEFAULTS_SUMMARIZE_TOKEN_PERCENT"`
 	MaxMediaSize              int                `json:"max_media_size,omitempty"         env:"PICOCLAW_AGENTS_DEFAULTS_MAX_MEDIA_SIZE"`
@@ -748,6 +749,17 @@ type SlackWebhookTarget struct {
 	WebhookURL SecureString `json:"webhook_url,omitzero" yaml:"webhook_url,omitempty"`
 	Username   string       `json:"username,omitempty"   yaml:"-"`
 	IconEmoji  string       `json:"icon_emoji,omitempty" yaml:"-"`
+}
+
+// YandexAliceSettings configures the Yandex Alice skill webhook channel.
+// Alice sends user commands via HTTP POST to the webhook path; the channel
+// proxies them to the agent and returns the text response.
+type YandexAliceSettings struct {
+	// WebhookPath is the HTTP path for the webhook (default: /webhook/yandex-alice).
+	WebhookPath string `json:"webhook_path,omitempty" yaml:"-"`
+	// AllowedUserIDs is a whitelist of Yandex user IDs allowed to use the skill.
+	// When empty, all users are allowed (useful for development).
+	AllowedUserIDs []string `json:"allowed_user_ids,omitempty" yaml:"allowed_user_ids,omitempty"`
 }
 
 type HeartbeatConfig struct {

@@ -2,6 +2,7 @@ package bus
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -90,6 +91,13 @@ type ContextUsageStreamer interface {
 type ReasoningStreamer interface {
 	UpdateReasoning(ctx context.Context, content string) error
 	FinalizeReasoning(ctx context.Context, content string) error
+}
+
+// UIStreamer can attach an interactive UI payload (the JSON object of a
+// ```gena-ui fence) to its final frame. Channels that render cards implement
+// it; the agent loop sets the payload right before finalize and forgets it.
+type UIStreamer interface {
+	SetUIPayload(ui json.RawMessage)
 }
 
 type MessageBus struct {

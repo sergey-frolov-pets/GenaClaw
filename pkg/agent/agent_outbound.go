@@ -62,7 +62,10 @@ func (al *AgentLoop) publishResponseOrError(
 }
 
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
-	if response == "" {
+	// Stop/cron/follow-up replies may carry a card block too: cut it before it
+	// reaches any messenger and pass it as the ui payload for pico.
+	response, ui := extractUI(response)
+	if strings.TrimSpace(response) == "" && len(ui) == 0 {
 		return
 	}
 
@@ -100,6 +103,7 @@ func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatI
 		SessionKey: sessionKey,
 		Content:    response,
 	}
+	msg.Context.Raw = rawWithUI(msg.Context.Raw, ui)
 	if sessionKey != "" {
 		msg.ContextUsage = computeContextUsage(al.agentForSession(sessionKey), sessionKey)
 	}

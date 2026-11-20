@@ -8,6 +8,7 @@ package channels
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -208,6 +209,14 @@ func outboundMessageEditPayload(msg bus.OutboundMessage, content string) map[str
 	}
 	if modelName := strings.TrimSpace(msg.Context.Raw["model_name"]); modelName != "" {
 		payload["model_name"] = modelName
+	}
+	// A card block travels as a JSON string in Raw and must reach the channel
+	// as an object, both when creating and when editing a placeholder.
+	if rawUI := strings.TrimSpace(msg.Context.Raw["ui"]); rawUI != "" {
+		var ui any
+		if err := json.Unmarshal([]byte(rawUI), &ui); err == nil {
+			payload["ui"] = ui
+		}
 	}
 	return payload
 }
@@ -774,6 +783,7 @@ type splitMarkerStreamer struct {
 	modelName        string
 	turnInputTokens  int
 	turnOutputTokens int
+	uiPayload        json.RawMessage
 }
 
 func (s *splitMarkerStreamer) Update(ctx context.Context, content string) error {
@@ -830,6 +840,19 @@ func (s *splitMarkerStreamer) SetTurnUsage(inputTokens, outputTokens int) {
 	s.turnInputTokens = inputTokens
 	s.turnOutputTokens = outputTokens
 	setStreamerTurnUsage(s.current, s.turnInputTokens, s.turnOutputTokens)
+}
+
+// SetUIPayload attaches a card block to the last segment of the stream.
+func (s *splitMarkerStreamer) SetUIPayload(ui json.RawMessage) {
+	if len(ui) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.uiPayload = append(json.RawMessage(nil), ui...)
+	if setter, ok := s.current.(bus.UIStreamer); ok {
+		setter.SetUIPayload(s.uiPayload)
+	}
 }
 
 func (s *splitMarkerStreamer) Cancel(ctx context.Context) {
@@ -912,6 +935,9 @@ func (s *splitMarkerStreamer) ensureCurrentLocked(ctx context.Context) error {
 	s.current = streamer
 	setStreamerModelName(s.current, s.modelName)
 	setStreamerTurnUsage(s.current, s.turnInputTokens, s.turnOutputTokens)
+	if setter, ok := s.current.(bus.UIStreamer); ok && len(s.uiPayload) > 0 {
+		setter.SetUIPayload(s.uiPayload)
+	}
 	return nil
 }
 
@@ -994,6 +1020,13 @@ func (s *finalizeHookStreamer) FinalizeReasoning(ctx context.Context, content st
 		return streamer.FinalizeReasoning(ctx, content)
 	}
 	return nil
+}
+
+// SetUIPayload forwards a card block to the wrapped streamer.
+func (s *finalizeHookStreamer) SetUIPayload(ui json.RawMessage) {
+	if setter, ok := s.Streamer.(bus.UIStreamer); ok {
+		setter.SetUIPayload(ui)
+	}
 }
 
 func (s *finalizeHookStreamer) SetModelName(modelName string) {

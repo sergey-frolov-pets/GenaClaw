@@ -612,6 +612,7 @@ func (al *AgentLoop) runAgentLoop(
 			}
 			msg.Context.Raw["model_name"] = modelName
 		}
+		msg.Context.Raw = rawWithUI(msg.Context.Raw, result.uiPayload)
 		markFinalOutbound(&msg)
 		al.bus.PublishOutbound(ctx, msg)
 	}

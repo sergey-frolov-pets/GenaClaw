@@ -211,3 +211,14 @@ func TestExtractNoFenceFastPathKeepsText(t *testing.T) {
 		t.Fatalf("text changed on fast path")
 	}
 }
+
+func TestExtractProseMentionKeepsTextVerbatim(t *testing.T) {
+	text := "Скилл называется gena-ui.\r\n\n\n\nОн рисует карточки.   \n"
+	got := Extract(text)
+	if got.HasBlock() || got.Dropped != "" {
+		t.Fatalf("prose mention treated as a block: %+v", got)
+	}
+	if got.Clean != text {
+		t.Fatalf("text changed on prose mention:\n got %q\nwant %q", got.Clean, text)
+	}
+}

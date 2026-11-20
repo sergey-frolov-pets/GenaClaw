@@ -330,6 +330,9 @@ func (c *PicoChannel) Send(ctx context.Context, msg bus.OutboundMessage) ([]stri
 	if modelName := strings.TrimSpace(msg.Context.Raw[PayloadKeyModelName]); modelName != "" {
 		payload[PayloadKeyModelName] = modelName
 	}
+	if ui, ok := uiPayloadObject(msg.Context.Raw[PayloadKeyUI]); ok {
+		payload[PayloadKeyUI] = ui
+	}
 	switch {
 	case isThought:
 		payload[PayloadKeyKind] = MessageKindThought
@@ -545,6 +548,8 @@ type picoStreamer struct {
 	reasoningLastLen int
 	reasoningLastAt  time.Time
 	reasoningContent string
+	uiPayload        json.RawMessage
+	uiSent           bool
 	mu               sync.Mutex
 }
 
@@ -566,6 +571,18 @@ func (s *picoStreamer) SetTurnUsage(inputTokens, outputTokens int) {
 	defer s.mu.Unlock()
 	s.turnInputTokens = inputTokens
 	s.turnOutputTokens = outputTokens
+}
+
+// SetUIPayload attaches an interactive card block to the final stream frame.
+// It implements bus.UIStreamer.
+func (s *picoStreamer) SetUIPayload(ui json.RawMessage) {
+	if s == nil || len(ui) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.uiPayload = append(json.RawMessage(nil), ui...)
+	s.uiSent = false
 }
 
 func (s *picoStreamer) Update(ctx context.Context, content string) error {
@@ -675,19 +692,27 @@ func (s *picoStreamer) sendLocked(ctx context.Context, content string, contextUs
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName
 		}
+		if obj, ok := uiPayloadObject(string(s.uiPayload)); ok {
+			payload[PayloadKeyUI] = obj
+			s.uiSent = true
+		}
 		setContextUsagePayload(payload, contextUsage)
 		setTurnUsagePayload(payload, s.turnInputTokens, s.turnOutputTokens)
 		outMsg := newMessage(TypeMessageCreate, payload)
 		if err := s.channel.broadcast(s.chatID, outMsg); err != nil {
 			return err
 		}
-	} else if content != s.lastContent || contextUsage != nil {
+	} else if content != s.lastContent || contextUsage != nil || (len(s.uiPayload) > 0 && !s.uiSent) {
 		payload := map[string]any{
 			PayloadKeyContent: content,
 			"message_id":      s.messageID,
 		}
 		if s.modelName != "" {
 			payload[PayloadKeyModelName] = s.modelName
+		}
+		if obj, ok := uiPayloadObject(string(s.uiPayload)); ok {
+			payload[PayloadKeyUI] = obj
+			s.uiSent = true
 		}
 		setTurnUsagePayload(payload, s.turnInputTokens, s.turnOutputTokens)
 		if err := s.channel.editMessagePayload(ctx, s.chatID, s.messageID, payload, contextUsage); err != nil {
@@ -1488,4 +1513,18 @@ func (c *PicoChannel) editMessagePayload(
 	setContextUsagePayload(normalized, contextUsage)
 	outMsg := newMessage(TypeMessageUpdate, normalized)
 	return c.broadcastToSession(chatID, outMsg)
+}
+
+// uiPayloadObject converts the Raw["ui"] JSON string into a payload object.
+// Invalid JSON is ignored so a broken block never blocks the text itself.
+func uiPayloadObject(raw string) (any, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, false
+	}
+	var obj any
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return nil, false
+	}
+	return obj, true
 }

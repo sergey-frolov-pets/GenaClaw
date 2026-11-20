@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -218,6 +219,7 @@ func finalizeConfiguredStreamingLLM(
 	ts *turnState,
 	exec *turnExecution,
 	content string,
+	ui json.RawMessage,
 	contextUsage *bus.ContextUsage,
 ) error {
 	if exec == nil || exec.streamingPublisher == nil {
@@ -225,6 +227,7 @@ func finalizeConfiguredStreamingLLM(
 	}
 	publisher := exec.streamingPublisher
 	exec.streamingPublisher = nil
+	publisher.uiPayload = ui
 	visibleBeforeFinalize := publisher.Published()
 	if err := publisher.Finalize(ctx, content, contextUsage); err != nil {
 		if visibleBeforeFinalize {
@@ -374,6 +377,7 @@ type streamingChunkPublisher struct {
 	channel            string
 	chatID             string
 	modelName          string
+	uiPayload          json.RawMessage
 	published          bool
 	reasoningPublished bool
 	err                error
@@ -450,6 +454,11 @@ func (p *streamingChunkPublisher) Finalize(ctx context.Context, content string, 
 	if usage := p.ts.GetLastUsage(); usage != nil {
 		if setter, ok := p.streamer.(interface{ SetTurnUsage(in, out int) }); ok {
 			setter.SetTurnUsage(usage.PromptTokens, usage.CompletionTokens)
+		}
+	}
+	if len(p.uiPayload) > 0 {
+		if setter, ok := p.streamer.(bus.UIStreamer); ok {
+			setter.SetUIPayload(p.uiPayload)
 		}
 	}
 	var err error

@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -178,12 +179,19 @@ func registerSharedTools(
 					allowReadPaths,
 				)
 			}
-			messageTool.SetSendCallback(func(
+			sendOutbound := func(
 				ctx context.Context,
 				channel, chatID, content, replyToMessageID string,
 				mediaParts []bus.MediaPart,
+				raw map[string]string,
 			) error {
 				outboundCtx := bus.NewOutboundContext(channel, chatID, replyToMessageID)
+				for key, value := range raw {
+					if outboundCtx.Raw == nil {
+						outboundCtx.Raw = make(map[string]string, len(raw))
+					}
+					outboundCtx.Raw[key] = value
+				}
 				outboundAgentID, outboundSessionKey, outboundScope := outboundTurnMetadata(
 					tools.ToolAgentID(ctx),
 					tools.ToolSessionKey(ctx),
@@ -222,6 +230,24 @@ func registerSharedTools(
 				pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer pubCancel()
 				return msgBus.PublishOutbound(pubCtx, outboundMessage)
+			}
+			messageTool.SetSendCallback(func(
+				ctx context.Context,
+				channel, chatID, content, replyToMessageID string,
+				mediaParts []bus.MediaPart,
+			) error {
+				return sendOutbound(ctx, channel, chatID, content, replyToMessageID, mediaParts, nil)
+			})
+			messageTool.SetSendCardCallback(func(
+				ctx context.Context,
+				channel, chatID, content, replyToMessageID string,
+				mediaParts []bus.MediaPart,
+				ui json.RawMessage,
+			) error {
+				return sendOutbound(
+					ctx, channel, chatID, content, replyToMessageID, mediaParts,
+					rawWithUI(nil, ui),
+				)
 			})
 			agent.Tools.Register(messageTool)
 		}

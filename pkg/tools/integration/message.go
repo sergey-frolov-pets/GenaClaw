@@ -2,6 +2,7 @@ package integrationtools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"mime"
 	"os"
@@ -16,12 +17,23 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	fstools "github.com/sipeed/picoclaw/pkg/tools/fs"
+	"github.com/sipeed/picoclaw/pkg/uiblock"
 )
 
 type SendCallbackWithContext func(
 	ctx context.Context,
 	channel, chatID, content, replyToMessageID string,
 	mediaParts []bus.MediaPart,
+) error
+
+// SendCardCallbackWithContext is the richer form used when the reply carries an
+// interactive UI block (```gena-ui): content is already the clean text and ui
+// is the raw JSON object. Optional, so existing callers keep working.
+type SendCardCallbackWithContext func(
+	ctx context.Context,
+	channel, chatID, content, replyToMessageID string,
+	mediaParts []bus.MediaPart,
+	ui json.RawMessage,
 ) error
 
 type messageMediaArg struct {
@@ -38,6 +50,7 @@ type sentTarget struct {
 
 type MessageTool struct {
 	sendCallback      SendCallbackWithContext
+	sendCardCallback  SendCardCallbackWithContext
 	workspace         string
 	restrict          bool
 	maxFileSize       int
@@ -177,6 +190,12 @@ func (t *MessageTool) SetSendCallback(callback SendCallbackWithContext) {
 	t.sendCallback = callback
 }
 
+// SetSendCardCallback registers the card-capable send path. When it is not set,
+// a UI block is simply cut off and the clean text is sent.
+func (t *MessageTool) SetSendCardCallback(callback SendCardCallbackWithContext) {
+	t.sendCardCallback = callback
+}
+
 func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
 	content, _ := args["content"].(string)
 	content = strings.TrimSpace(content)
@@ -209,8 +228,16 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return &ToolResult{ForLLM: "No target channel/chat specified", IsError: true}
 	}
 
-	if t.sendCallback == nil {
+	if t.sendCallback == nil && t.sendCardCallback == nil {
 		return &ToolResult{ForLLM: "Message sending not configured", IsError: true}
+	}
+
+	// A card block must never reach the channel text or the session history.
+	extracted := uiblock.Extract(content)
+	content = strings.TrimSpace(extracted.Clean)
+	ui := extracted.Block
+	if content == "" && len(mediaArgs) == 0 && len(ui) == 0 {
+		return &ToolResult{ForLLM: "content or media is required", IsError: true}
 	}
 
 	parts, err := t.buildMediaParts(channel, chatID, content, mediaArgs)
@@ -218,11 +245,19 @@ func (t *MessageTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return &ToolResult{ForLLM: err.Error(), IsError: true, Err: err}
 	}
 
-	if err := t.sendCallback(ctx, channel, chatID, content, replyToMessageID, parts); err != nil {
+	sendErr := error(nil)
+	if len(ui) > 0 && t.sendCardCallback != nil {
+		sendErr = t.sendCardCallback(ctx, channel, chatID, content, replyToMessageID, parts, ui)
+	} else if t.sendCallback != nil {
+		sendErr = t.sendCallback(ctx, channel, chatID, content, replyToMessageID, parts)
+	} else {
+		return &ToolResult{ForLLM: "Message sending not configured", IsError: true}
+	}
+	if sendErr != nil {
 		return &ToolResult{
-			ForLLM:  fmt.Sprintf("sending message: %v", err),
+			ForLLM:  fmt.Sprintf("sending message: %v", sendErr),
 			IsError: true,
-			Err:     err,
+			Err:     sendErr,
 		}
 	}
 
