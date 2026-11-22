@@ -442,7 +442,7 @@ func connectServer(
 			env = append(env, fmt.Sprintf("%s=%s", k, v))
 		}
 		cmd.Env = env
-		transport = &isolatedCommandTransport{Command: cmd}
+		transport = &isolatedCommandTransport{Command: cmd, Name: name}
 	default:
 		return nil, fmt.Errorf(
 			"unsupported transport type: %s (supported: stdio, sse, http, streamable-http)",

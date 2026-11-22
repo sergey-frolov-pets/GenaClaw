@@ -1,11 +1,14 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -14,6 +17,7 @@ import (
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/sipeed/picoclaw/pkg/isolation"
+	"github.com/sipeed/picoclaw/pkg/logger"
 )
 
 var isolatedCommandTerminateDuration = 5 * time.Second
@@ -21,7 +25,9 @@ var isolatedCommandTerminateDuration = 5 * time.Second
 // isolatedCommandTransport mirrors the SDK command transport but routes
 // process startup through pkg/isolation so Windows post-start hooks run too.
 type isolatedCommandTransport struct {
-	Command           *exec.Cmd
+	Command *exec.Cmd
+	// Name is the configured MCP server name, used for diagnostics only.
+	Name              string
 	TerminateDuration time.Duration
 }
 
@@ -31,6 +37,10 @@ func (t *isolatedCommandTransport) Connect(ctx context.Context) (sdkmcp.Connecti
 		return nil, err
 	}
 	stdout = io.NopCloser(stdout)
+	stderr, err := t.Command.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
 	stdin, err := t.Command.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -38,11 +48,49 @@ func (t *isolatedCommandTransport) Connect(ctx context.Context) (sdkmcp.Connecti
 	if err := isolation.Start(t.Command); err != nil {
 		return nil, err
 	}
+	name := t.Name
+	if name == "" {
+		name = filepath.Base(t.Command.Path)
+	}
+	go pipeServerStderr(name, stderr)
 	td := t.TerminateDuration
 	if td <= 0 {
 		td = isolatedCommandTerminateDuration
 	}
 	return newIsolatedIOConn(&isolatedPipeRWC{cmd: t.Command, stdout: stdout, stdin: stdin, terminateDuration: td}), nil
+}
+
+// pipeServerStderr forwards the MCP server's stderr into the gateway log.
+// Without it the subprocess stderr went to /dev/null and a broken server left
+// no trace besides "invalid character ..." on the protocol stream.
+func pipeServerStderr(name string, r io.Reader) {
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 4096), 64*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if len(line) > 500 {
+			line = line[:500] + "…"
+		}
+		fields := map[string]any{"server": name, "line": line}
+		if looksLikeServerFailure(line) {
+			logger.WarnCF("mcp", "server stderr", fields)
+			continue
+		}
+		logger.DebugCF("mcp", "server stderr", fields)
+	}
+}
+
+func looksLikeServerFailure(line string) bool {
+	l := strings.ToLower(line)
+	for _, marker := range []string{"panic:", "fatal", "error", "exception", "unhandled"} {
+		if strings.Contains(l, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type isolatedPipeRWC struct {
@@ -108,35 +156,73 @@ type isolatedMsgOrErr struct {
 	err error
 }
 
+// nonJSONLogLimit — сколько первых «мусорных» строк stdout логировать подробно.
+const nonJSONLogLimit = 5
+
 func newIsolatedIOConn(rwc io.ReadWriteCloser) *isolatedIOConn {
 	incoming := make(chan isolatedMsgOrErr)
 	closed := make(chan struct{})
 	go func() {
-		dec := json.NewDecoder(rwc)
+		reader := bufio.NewReaderSize(rwc, 64*1024)
+		skipped := 0
+		send := func(m isolatedMsgOrErr) bool {
+			select {
+			case incoming <- m:
+				return true
+			case <-closed:
+				return false
+			}
+		}
 		for {
-			var raw json.RawMessage
-			err := dec.Decode(&raw)
-			if err == nil {
-				var tr [1]byte
-				if n, readErr := dec.Buffered().Read(tr[:]); n > 0 {
-					if tr[0] != '\n' && tr[0] != '\r' {
-						err = fmt.Errorf("invalid trailing data at the end of stream")
+			line, readErr := reader.ReadString('\n')
+			if line != "" {
+				// Строка не по протоколу (лог Prisma/Node, баннер обёртки) не должна
+				// убивать соединение: пропускаем её и читаем дальше.
+				if raw, ok := parseServerLine(line, &skipped); ok {
+					if !send(isolatedMsgOrErr{msg: raw}) {
+						return
 					}
-				} else if readErr != nil && readErr != io.EOF {
-					err = readErr
 				}
 			}
-			select {
-			case incoming <- isolatedMsgOrErr{msg: raw, err: err}:
-			case <-closed:
-				return
-			}
-			if err != nil {
+			if readErr != nil {
+				send(isolatedMsgOrErr{err: readErr})
 				return
 			}
 		}
 	}()
 	return &isolatedIOConn{rwc: rwc, incoming: incoming, closed: closed}
+}
+
+// parseServerLine отдаёт сообщение, только если строка — валидный JSON-RPC.
+// Всё остальное считается шумом сервера и пишется в лог (без спама).
+func parseServerLine(line string, skipped *int) (json.RawMessage, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return nil, false
+	}
+	raw := json.RawMessage(trimmed)
+	if !json.Valid([]byte(trimmed)) {
+		*skipped = *skipped + 1
+		logSkippedServerLine(trimmed, *skipped)
+		return nil, false
+	}
+	if _, err := readIsolatedBatch(raw); err != nil {
+		*skipped = *skipped + 1
+		logSkippedServerLine(trimmed, *skipped)
+		return nil, false
+	}
+	return raw, true
+}
+
+func logSkippedServerLine(line string, count int) {
+	if count > nonJSONLogLimit && count%100 != 0 {
+		return
+	}
+	if len(line) > 300 {
+		line = line[:300] + "…"
+	}
+	logger.DebugCF("mcp", "skipped non-JSON line from server stdout",
+		map[string]any{"line": line, "skipped_total": count})
 }
 
 func (c *isolatedIOConn) SessionID() string { return "" }
