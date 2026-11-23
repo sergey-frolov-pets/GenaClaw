@@ -61,10 +61,56 @@ func (al *AgentLoop) publishResponseOrError(
 	al.PublishResponseIfNeeded(ctx, channel, chatID, sessionKey, response)
 }
 
+// silentReplyMarker is the sentinel an agent can return as its whole final
+// answer to stay silent: nothing is delivered to the channel in that case.
+// It exists for scheduled turns (cron) that often have nothing to say — the
+// prompt asks the model to answer with the marker, and the marker itself must
+// never reach the user.
+const silentReplyMarker = "[[silent]]"
+
+// isSilentReply reports whether the whole response is the silent marker
+// (optionally surrounded by whitespace and stray punctuation).
+func isSilentReply(response string) bool {
+	lowered := strings.ToLower(response)
+	if !strings.Contains(lowered, silentReplyMarker) {
+		return false
+	}
+	rest := strings.ReplaceAll(lowered, silentReplyMarker, "")
+	rest = strings.Trim(rest, " \t\r\n.:;,!?-—–«»\"'`")
+	return rest == ""
+}
+
+// stripSilentMarker removes the marker from a reply that also carries real text.
+func stripSilentMarker(response string) string {
+	if !strings.Contains(strings.ToLower(response), silentReplyMarker) {
+		return response
+	}
+	for {
+		idx := strings.Index(strings.ToLower(response), silentReplyMarker)
+		if idx < 0 {
+			break
+		}
+		response = response[:idx] + response[idx+len(silentReplyMarker):]
+	}
+	return strings.TrimSpace(response)
+}
+
 func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatID, sessionKey, response string) {
 	// Stop/cron/follow-up replies may carry a card block too: cut it before it
 	// reaches any messenger and pass it as the ui payload for pico.
 	response, ui := extractUI(response)
+	if strings.TrimSpace(response) == "" && len(ui) == 0 {
+		return
+	}
+	if isSilentReply(response) {
+		logger.DebugCF(
+			"agent",
+			"Skipped outbound (silent reply marker)",
+			map[string]any{"channel": channel, "chat_id": chatID},
+		)
+		return
+	}
+	response = stripSilentMarker(response)
 	if strings.TrimSpace(response) == "" && len(ui) == 0 {
 		return
 	}

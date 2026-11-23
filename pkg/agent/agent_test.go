@@ -451,6 +451,38 @@ func TestPublishResponseIfNeeded_DismissesToolFeedbackWhenMessageToolAlreadySent
 	}
 }
 
+func TestPublishResponseIfNeeded_SkipsSilentMarker(t *testing.T) {
+	al, _, msgBus, provider, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	_ = provider
+
+	for _, reply := range []string{"[[silent]]", "  [[silent]].  ", "[[SILENT]]"} {
+		al.PublishResponseIfNeeded(context.Background(), "vk", "42", "agent:cron-x", reply)
+		select {
+		case outbound := <-msgBus.OutboundChan():
+			t.Fatalf("reply %q published: %q", reply, outbound.Content)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func TestPublishResponseIfNeeded_StripsMarkerFromRealReply(t *testing.T) {
+	al, _, msgBus, provider, cleanup := newTestAgentLoop(t)
+	defer cleanup()
+	_ = provider
+
+	al.PublishResponseIfNeeded(context.Background(), "vk", "42", "agent:cron-x", "План готов. [[silent]]")
+
+	select {
+	case outbound := <-msgBus.OutboundChan():
+		if outbound.Content != "План готов." {
+			t.Fatalf("outbound content = %q, want %q", outbound.Content, "План готов.")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected outbound")
+	}
+}
+
 func TestPublishResponseIfNeeded_MarksFinalOutbound(t *testing.T) {
 	al, _, msgBus, provider, cleanup := newTestAgentLoop(t)
 	defer cleanup()
