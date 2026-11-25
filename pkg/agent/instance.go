@@ -172,6 +172,7 @@ func NewAgentInstance(
 			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseBM25,
 			mcpDiscoveryActive && cfg.Tools.MCP.Discovery.UseRegex,
 		).
+		WithMemoryOptions(defaults.MemoryDailyMode, defaults.MemoryDailyDays).
 		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker)
 
 	agentID := routing.DefaultAgentID
@@ -202,7 +203,21 @@ func NewAgentInstance(
 		maxTokens = 8192
 	}
 
+	// Per-model overrides: models.<name>.max_tokens / context_window win over
+	// agents.defaults when set. This lets one global config serve several
+	// coding models with different windows (e.g. 1M for ds-pro, 256k for kimi).
+	var modelCfg *config.ModelConfig
+	if mc, err := cfg.GetModelConfig(model); err == nil && mc != nil {
+		modelCfg = mc
+		if mc.MaxTokens > 0 {
+			maxTokens = mc.MaxTokens
+		}
+	}
+
 	contextWindow := defaults.ContextWindow
+	if modelCfg != nil && modelCfg.ContextWindow > 0 {
+		contextWindow = modelCfg.ContextWindow
+	}
 	if contextWindow == 0 {
 		// Default heuristic: 4x the output token limit.
 		// Most models have context windows well above their output limits

@@ -1373,3 +1373,76 @@ func TestNewAgentInstance_ExplicitEmptyToolsFieldBlocksAllTools(t *testing.T) {
 		})
 	}
 }
+
+func TestNewAgentInstance_PerModelContextWindowOverride(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelCtx  int
+		modelMax  int
+		defCtx    int
+		defMax    int
+		wantCtx   int
+		wantMax   int
+	}{
+		{
+			name:     "model override wins over defaults",
+			modelCtx: 1048576, modelMax: 32768,
+			defCtx: 262144, defMax: 16384,
+			wantCtx: 1048576, wantMax: 32768,
+		},
+		{
+			name:     "only context window overridden",
+			modelCtx: 131072, modelMax: 0,
+			defCtx: 262144, defMax: 16384,
+			wantCtx: 131072, wantMax: 16384,
+		},
+		{
+			name:     "no model override inherits defaults",
+			modelCtx: 0, modelMax: 0,
+			defCtx: 262144, defMax: 16384,
+			wantCtx: 262144, wantMax: 16384,
+		},
+		{
+			name:     "no override and no defaults falls back to 4x max tokens",
+			modelCtx: 0, modelMax: 0,
+			defCtx: 0, defMax: 4096,
+			wantCtx: 16384, wantMax: 4096,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			cfg := &config.Config{
+				Agents: config.AgentsConfig{
+					Defaults: config.AgentDefaults{
+						Workspace:         tmpDir,
+						ModelName:         "coding-model",
+						MaxTokens:         tt.defMax,
+						ContextWindow:     tt.defCtx,
+						MaxToolIterations: 5,
+					},
+				},
+				ModelList: []*config.ModelConfig{
+					{
+						ModelName:     "coding-model",
+						Model:         "coding-model",
+						Provider:      "openai",
+						APIBase:       "https://example.invalid/v1",
+						ContextWindow: tt.modelCtx,
+						MaxTokens:     tt.modelMax,
+					},
+				},
+			}
+
+			agent := NewAgentInstance(nil, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+			if agent.ContextWindow != tt.wantCtx {
+				t.Fatalf("ContextWindow = %d, want %d", agent.ContextWindow, tt.wantCtx)
+			}
+			if agent.MaxTokens != tt.wantMax {
+				t.Fatalf("MaxTokens = %d, want %d", agent.MaxTokens, tt.wantMax)
+			}
+		})
+	}
+}

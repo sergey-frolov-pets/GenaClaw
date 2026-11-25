@@ -1146,6 +1146,7 @@ func configuredStreamingProcessOptions(channel string) processOptions {
 		SessionKey:              "agent:main:" + channel + ":session-1",
 		Channel:                 channel,
 		ChatID:                  "session-1",
+		SenderID:                "test-sender",
 		UserMessage:             "hello",
 		DefaultResponse:         defaultResponse,
 		EnableSummary:           false,

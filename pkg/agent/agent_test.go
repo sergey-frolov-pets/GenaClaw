@@ -5489,12 +5489,47 @@ func TestAgentLoop_EmptyModelResponseUsesAccurateFallback(t *testing.T) {
 	provider := &simpleMockProvider{response: ""}
 	al := NewAgentLoop(cfg, msgBus, provider)
 
+	// A real user message: an empty model answer must not produce a canned
+	// service line — nothing is sent at all.
 	response, err := al.ProcessDirectWithChannel(context.Background(), "hello", "empty-response", "test", "chat1")
 	if err != nil {
 		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
 	}
-	if response != defaultResponse {
-		t.Fatalf("response = %q, want %q", response, defaultResponse)
+	if response != "" {
+		t.Fatalf("response = %q, want empty (no service message)", response)
+	}
+}
+
+// Scheduled turns (cron/heartbeat) that produce nothing must stay silent even
+// though their sender is not a person.
+func TestAgentLoop_EmptyResponseOnScheduledTurnStaysSilent(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "agent-test-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace:         tmpDir,
+				ModelName:         "test-model",
+				MaxTokens:         4096,
+				MaxToolIterations: 3,
+			},
+		},
+	}
+
+	msgBus := bus.NewMessageBus()
+	provider := &simpleMockProvider{response: ""}
+	al := NewAgentLoop(cfg, msgBus, provider)
+
+	response, err := al.ProcessDirectWithChannel(context.Background(), "checkin", "cron-silent", "vk", "chat1")
+	if err != nil {
+		t.Fatalf("ProcessDirectWithChannel failed: %v", err)
+	}
+	if response != "" {
+		t.Fatalf("cron response = %q, want empty", response)
 	}
 }
 

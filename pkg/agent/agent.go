@@ -28,6 +28,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/routing"
 	"github.com/sipeed/picoclaw/pkg/session"
 	"github.com/sipeed/picoclaw/pkg/state"
+	"github.com/sipeed/picoclaw/pkg/tools"
 	"github.com/sipeed/picoclaw/pkg/utils"
 )
 
@@ -119,7 +120,11 @@ type continuationTarget struct {
 }
 
 const (
-	defaultResponse            = "The model returned an empty response. This may indicate a provider error or token limit."
+	// defaultResponse is empty on purpose: when the model returns nothing, no
+	// user-facing text is produced and nothing is delivered. The old canned
+	// line ("The model returned an empty response...") was a service message
+	// nobody asked for — it leaked into chats and scheduled turns.
+	defaultResponse            = ""
 	toolLimitResponse          = "I've reached `max_tool_iterations` without a final response. Increase `max_tool_iterations` in config.json if this task needs more tool steps."
 	handledToolResponseSummary = "Requested output delivered via tool attachment."
 	sessionKeyAgentPrefix      = "agent:"
@@ -577,6 +582,20 @@ func (al *AgentLoop) runAgentLoop(
 		return "", nil
 	}
 
+	// A tool (message/send_file/tts) may have already delivered the answer to
+	// the user. With an empty defaultResponse the loop's own text is empty in
+	// that case, so callers would otherwise lose the fact that a response was
+	// produced. Report the delivery instead of an empty string.
+	responseContent := result.finalContent
+	if responseContent == "" && al.deliveredViaMessageTool(
+		agent,
+		opts.Dispatch.SessionKey,
+		opts.Dispatch.Channel(),
+		opts.Dispatch.ChatID(),
+	) {
+		responseContent = handledToolResponseSummary
+	}
+
 	for _, followUp := range result.followUps {
 		if pubErr := al.bus.PublishInbound(ctx, followUp); pubErr != nil {
 			logger.WarnCF("agent", "Failed to publish follow-up after turn",
@@ -628,7 +647,27 @@ func (al *AgentLoop) runAgentLoop(
 			})
 	}
 
-	return result.finalContent, nil
+	return responseContent, nil
+}
+
+// deliveredViaMessageTool reports whether the message tool already sent
+// something to the same channel+chat during this turn.
+func (al *AgentLoop) deliveredViaMessageTool(
+	agent *AgentInstance,
+	sessionKey, channel, chatID string,
+) bool {
+	if agent == nil || channel == "" || chatID == "" {
+		return false
+	}
+	tool, ok := agent.Tools.Get("message")
+	if !ok {
+		return false
+	}
+	mt, ok := tool.(*tools.MessageTool)
+	if !ok {
+		return false
+	}
+	return mt.HasSentTo(sessionKey, channel, chatID)
 }
 
 // selectCandidates returns the model candidates and resolved model name to use

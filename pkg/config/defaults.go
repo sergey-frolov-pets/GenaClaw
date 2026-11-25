@@ -33,6 +33,10 @@ func DefaultConfig() *Config {
 				MaxToolIterations:         50,
 				SummarizeMessageThreshold: 20,
 				SummarizeTokenPercent:     75,
+				MaxToolResultBytes:        8000,
+				HistoryToolKeep:           6,
+				MemoryDailyMode:           "headlines",
+				MemoryDailyDays:           3,
 				SteeringMode:              "one-at-a-time",
 				ToolFeedback: ToolFeedbackConfig{
 					Enabled:          false,

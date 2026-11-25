@@ -30,6 +30,13 @@ func (m *legacyContextManager) Assemble(_ context.Context, req *AssembleRequest)
 	}
 	history := agent.Sessions.GetHistory(req.SessionKey)
 	summary := agent.Sessions.GetSummary(req.SessionKey)
+	if cfg := m.al.GetConfig(); cfg != nil {
+		history = shrinkToolResults(
+			history,
+			cfg.Agents.Defaults.MaxToolResultBytes,
+			cfg.Agents.Defaults.HistoryToolKeep,
+		)
+	}
 	return &AssembleResponse{
 		History: history,
 		Summary: summary,

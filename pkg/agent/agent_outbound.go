@@ -153,14 +153,19 @@ func (al *AgentLoop) PublishResponseIfNeeded(ctx context.Context, channel, chatI
 	if sessionKey != "" {
 		msg.ContextUsage = computeContextUsage(al.agentForSession(sessionKey), sessionKey)
 	}
-	markFinalOutbound(&msg)
-	al.bus.PublishOutbound(ctx, msg)
-	logger.InfoCF("agent", "Published outbound response",
-		map[string]any{
-			"channel":     channel,
-			"chat_id":     chatID,
-			"content_len": len(response),
-		})
+	// A turn that delivered its answer through the message tool reports the
+	// delivery summary instead of its (empty) text. That is not a final answer,
+	// so it must not be published a second time here.
+	if response != handledToolResponseSummary {
+		markFinalOutbound(&msg)
+		al.bus.PublishOutbound(ctx, msg)
+		logger.InfoCF("agent", "Published outbound response",
+			map[string]any{
+				"channel":     channel,
+				"chat_id":     chatID,
+				"content_len": len(response),
+			})
+	}
 }
 
 func (al *AgentLoop) targetReasoningChannelID(channelName string) (chatID string) {

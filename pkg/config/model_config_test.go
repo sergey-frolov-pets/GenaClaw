@@ -355,3 +355,38 @@ func TestModelConfig_RequestTimeoutDefaultZeroValue(t *testing.T) {
 		t.Fatalf("RequestTimeout = %d, want 0", cfg.RequestTimeout)
 	}
 }
+
+func TestModelConfig_ContextWindowJSONRoundTrip(t *testing.T) {
+	raw := `{"model_name":"ds-pro","provider":"deepseek","model":"deepseek-v4-pro",
+		"context_window":1048576,"max_tokens":32768}`
+
+	var mc ModelConfig
+	if err := json.Unmarshal([]byte(raw), &mc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if mc.ContextWindow != 1048576 {
+		t.Fatalf("ContextWindow = %d, want 1048576", mc.ContextWindow)
+	}
+	if mc.MaxTokens != 32768 {
+		t.Fatalf("MaxTokens = %d, want 32768", mc.MaxTokens)
+	}
+
+	out, err := json.Marshal(&mc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(out), `"context_window":1048576`) {
+		t.Fatalf("marshalled JSON missing context_window: %s", out)
+	}
+
+	// Omitted fields must stay omitted (omitempty), so old configs are untouched.
+	var empty ModelConfig
+	empty.ModelName, empty.Model = "m", "m"
+	out, err = json.Marshal(&empty)
+	if err != nil {
+		t.Fatalf("marshal empty: %v", err)
+	}
+	if strings.Contains(string(out), "context_window") || strings.Contains(string(out), `"max_tokens"`) {
+		t.Fatalf("zero overrides should be omitted, got: %s", out)
+	}
+}

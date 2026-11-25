@@ -22,12 +22,14 @@ import (
 )
 
 type ContextBuilder struct {
-	workspace      string
-	skillsLoader   *skills.SkillsLoader
-	memory         *MemoryStore
-	splitOnMarker  bool
-	agentDiscovery func(agentID string) []AgentDescriptor
-	promptRegistry *PromptRegistry
+	workspace       string
+	skillsLoader    *skills.SkillsLoader
+	memory          *MemoryStore
+	splitOnMarker   bool
+	memoryDailyMode string
+	memoryDailyDays int
+	agentDiscovery  func(agentID string) []AgentDescriptor
+	promptRegistry  *PromptRegistry
 
 	// Cache for system prompt to avoid rebuilding on every call.
 	// This fixes issue #607: repeated reprocessing of the entire context.
@@ -69,6 +71,24 @@ func (cb *ContextBuilder) WithToolDiscovery(useBM25, useRegex bool) *ContextBuil
 func (cb *ContextBuilder) WithSplitOnMarker(enabled bool) *ContextBuilder {
 	cb.splitOnMarker = enabled
 	return cb
+}
+
+// WithMemoryOptions controls how much of the memory tree reaches the prompt.
+// mode: "full" (whole daily notes), "headlines" (titles, see DailyHeadlines),
+// "off" (MEMORY.md only). days: how many recent daily notes to include.
+func (cb *ContextBuilder) WithMemoryOptions(mode string, days int) *ContextBuilder {
+	cb.memoryDailyMode = strings.ToLower(strings.TrimSpace(mode))
+	cb.memoryDailyDays = days
+	return cb
+}
+
+// memoryContext renders the memory block using the configured daily-note mode.
+func (cb *ContextBuilder) memoryContext() string {
+	mode := cb.memoryDailyMode
+	if mode == "" {
+		mode = "full"
+	}
+	return cb.memory.GetMemoryContextWithOptions(mode, cb.memoryDailyDays)
 }
 
 func (cb *ContextBuilder) WithAgentDiscovery(
@@ -306,7 +326,7 @@ func (cb *ContextBuilder) buildSystemPromptParts(opts systemPromptBuildOptions) 
 	}
 
 	// Memory context
-	memoryContext := cb.memory.GetMemoryContext()
+	memoryContext := cb.memoryContext()
 	if memoryContext != "" {
 		add(PromptPart{
 			ID:      "context.memory",
