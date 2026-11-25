@@ -59,6 +59,7 @@ type AgentLoop struct {
 	evolution      *evolutionBridge
 	hookRuntime    hookRuntime
 	steering       *steeringQueue
+	checkpoints    *TurnCheckpointStore
 	pendingSkills  sync.Map
 	pendingStops   sync.Map
 	mu             sync.RWMutex
@@ -149,6 +150,26 @@ const (
 
 func (al *AgentLoop) Run(ctx context.Context) error {
 	al.running.Store(true)
+
+	if al.checkpoints != nil {
+		// Watchdog тишины: если running-ход не подаёт признаков жизни дольше
+		// порога, пишем предупреждение и событие agent.turn.stalled.
+		go al.checkpoints.Watchdog(ctx, 15*time.Second, 45*time.Second, func(cp TurnCheckpoint) {
+			al.emitEvent(
+				runtimeevents.KindAgentTurnStalled,
+				HookMeta{AgentID: cp.AgentID, SessionKey: cp.SessionKey, TurnID: cp.TurnID},
+				StalledPayload{
+					SessionKey:  cp.SessionKey,
+					Phase:       cp.Phase,
+					Iteration:   cp.Iteration,
+					Step:        cp.Step,
+					LastTool:    cp.LastTool,
+					StalledForS: cp.StalledForS,
+					UserMessage: cp.UserMessage,
+				},
+			)
+		})
+	}
 
 	if err := al.ensureHooksInitialized(ctx); err != nil {
 		return err

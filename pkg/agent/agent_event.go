@@ -47,6 +47,15 @@ func (al *AgentLoop) emitEvent(kind runtimeevents.Kind, meta HookMeta, payload a
 		return
 	}
 
+	// Checkpoint хода: наблюдаемость, не влияет на исполнение.
+	if al.checkpoints != nil {
+		evt.Scope.Iteration = clonedMeta.Iteration
+		al.checkpoints.Note(evt)
+		if kind == runtimeevents.KindAgentTurnEnd {
+			al.checkpoints.Finish(evt.Scope.SessionKey)
+		}
+	}
+
 	deliveredToEvolution := false
 	if kind == runtimeevents.KindAgentTurnEnd {
 		evolution := al.currentEvolutionBridge()

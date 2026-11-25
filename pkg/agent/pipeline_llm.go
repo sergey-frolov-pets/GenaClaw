@@ -571,8 +571,11 @@ func (p *Pipeline) CallLLM(
 			al.publishPicoReasoning(turnCtx, reasoningContent, ts.chatID, ts.sessionKey, exec.llmModelName)
 		}
 	} else {
+		// Detach from the turn context: the goroutine often starts after
+		// runTurn has canceled turnCtx, and handleReasoning would then drop
+		// the reasoning before publishing (it applies its own 5s timeout).
 		go al.handleReasoning(
-			turnCtx,
+			context.WithoutCancel(turnCtx),
 			reasoningContent,
 			ts.channel,
 			al.targetReasoningChannelID(ts.channel),

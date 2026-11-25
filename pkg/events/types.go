@@ -50,6 +50,9 @@ type Scope struct {
 	SpaceType string `json:"space_type,omitempty"`
 	ChatType  string `json:"chat_type,omitempty"`
 
+	// Iteration — номер итерации хода (агентский цикл). 0 = не задано.
+	Iteration int `json:"iteration,omitempty"`
+
 	SenderID  string `json:"sender_id,omitempty"`
 	MessageID string `json:"message_id,omitempty"`
 }

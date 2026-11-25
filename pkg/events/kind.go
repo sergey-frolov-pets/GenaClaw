@@ -44,6 +44,8 @@ const (
 	KindAgentSubTurnOrphan Kind = "agent.subturn.orphan"
 	// KindAgentError is emitted when agent execution reports an error.
 	KindAgentError Kind = "agent.error"
+	// KindAgentTurnStalled is emitted when a turn shows no progress for too long.
+	KindAgentTurnStalled Kind = "agent.turn.stalled"
 
 	// KindChannelLifecycleStarted is emitted when a channel starts.
 	KindChannelLifecycleStarted Kind = "channel.lifecycle.started"
