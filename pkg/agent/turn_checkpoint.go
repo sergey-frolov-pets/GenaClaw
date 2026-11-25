@@ -196,6 +196,11 @@ func (s *TurnCheckpointStore) Note(evt runtimeevents.Event) {
 	if phase == "" {
 		return
 	}
+	// Фоновая суммаризация идёт вне хода пользователя: в снимок и watchdog
+	// её не берём, иначе появляется «зависший summarize» (видели на первом прогоне).
+	if evt.Kind == runtimeevents.KindAgentSessionSummarize {
+		return
+	}
 
 	now := s.now()
 	sessionKey := strings.TrimSpace(evt.Scope.SessionKey)
