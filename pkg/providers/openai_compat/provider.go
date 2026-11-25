@@ -42,6 +42,7 @@ type Provider struct {
 	extraBody      map[string]any // Additional fields to inject into request body
 	customHeaders  map[string]string
 	userAgent      string
+	thinkingBudget int // Cap for thinking tokens (thinking.budget_tokens), 0 = provider default
 }
 
 type Option func(*Provider)
@@ -93,7 +94,33 @@ func WithRequestTimeout(timeout time.Duration) Option {
 
 func WithExtraBody(extraBody map[string]any) Option {
 	return func(p *Provider) {
-		p.extraBody = extraBody
+		if extraBody == nil {
+			p.extraBody = nil
+			return
+		}
+		// "max_thinking_tokens" is a PicoClaw-level knob, not a provider request
+		// field: pull it out of the extra body and use it as the thinking budget.
+		// The map is copied so the shared model config is never mutated.
+		copied := make(map[string]any, len(extraBody))
+		for k, v := range extraBody {
+			copied[k] = v
+		}
+		if budget, ok := common.AsInt(copied["max_thinking_tokens"]); ok {
+			delete(copied, "max_thinking_tokens")
+			if budget > 0 {
+				p.thinkingBudget = budget
+			}
+		}
+		p.extraBody = copied
+	}
+}
+
+// WithThinkingBudget caps how many tokens the model may spend on thinking.
+func WithThinkingBudget(tokens int) Option {
+	return func(p *Provider) {
+		if tokens > 0 {
+			p.thinkingBudget = tokens
+		}
 	}
 }
 
@@ -224,7 +251,7 @@ func (p *Provider) applyThinkingControl(requestBody map[string]any, model string
 	}
 
 	if p.SupportsThinking() {
-		p.applyDeepSeekThinkingControl(requestBody, level)
+		p.applyDeepSeekThinkingControl(requestBody, level, p.thinkingBudgetFor(options))
 		return
 	}
 
@@ -240,16 +267,35 @@ func (p *Provider) applyThinkingControl(requestBody map[string]any, model string
 	}
 }
 
-func (p *Provider) applyDeepSeekThinkingControl(requestBody map[string]any, level string) {
+// thinkingBudgetFor returns the thinking token cap: a per-call option wins over
+// the provider-level (extra_body) value.
+func (p *Provider) thinkingBudgetFor(options map[string]any) int {
+	if budget, ok := common.AsInt(options["max_thinking_tokens"]); ok && budget > 0 {
+		return budget
+	}
+	return p.thinkingBudget
+}
+
+// applyDeepSeekThinkingControl enables/disables thinking for DeepSeek-compatible
+// endpoints. budget > 0 is passed as thinking.budget_tokens so the model does not
+// spend an unbounded amount of tokens (and seconds) on reasoning.
+func (p *Provider) applyDeepSeekThinkingControl(requestBody map[string]any, level string, budget int) {
+	enable := func(effort string) {
+		thinking := map[string]any{"type": "enabled"}
+		if clamped, ok := clampThinkingBudget(budget, requestBody); ok {
+			thinking["budget_tokens"] = clamped
+		}
+		requestBody["thinking"] = thinking
+		requestBody["reasoning_effort"] = effort
+	}
+
 	switch level {
 	case "off":
 		requestBody["thinking"] = map[string]any{"type": "disabled"}
 	case "low", "medium", "high":
-		requestBody["thinking"] = map[string]any{"type": "enabled"}
-		requestBody["reasoning_effort"] = "high"
+		enable("high")
 	case "xhigh":
-		requestBody["thinking"] = map[string]any{"type": "enabled"}
-		requestBody["reasoning_effort"] = "max"
+		enable("max")
 	case "adaptive":
 		logger.WarnCF("provider.openai_compat",
 			`DeepSeek does not support thinking_level="adaptive"; using provider default thinking behavior`,
@@ -260,6 +306,20 @@ func (p *Provider) applyDeepSeekThinkingControl(requestBody map[string]any, leve
 			},
 		)
 	}
+}
+
+// clampThinkingBudget keeps budget_tokens below max_tokens, as providers require
+// the thinking budget to be strictly smaller than the output budget.
+func clampThinkingBudget(budget int, requestBody map[string]any) (int, bool) {
+	if budget <= 0 {
+		return 0, false
+	}
+	for _, field := range []string{"max_tokens", "max_completion_tokens"} {
+		if maxTokens, ok := common.AsInt(requestBody[field]); ok && maxTokens > 0 && budget >= maxTokens {
+			return maxTokens - 1, true
+		}
+	}
+	return budget, true
 }
 
 func normalizedThinkingLevel(options map[string]any) (string, bool) {

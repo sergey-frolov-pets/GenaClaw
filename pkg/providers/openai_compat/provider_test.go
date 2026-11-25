@@ -2197,3 +2197,101 @@ func TestSerializeMessages_StripsSystemParts(t *testing.T) {
 		t.Fatal("system_parts should not appear in serialized output")
 	}
 }
+
+func TestBuildRequestBody_ThinkingBudgetFromExtraBody(t *testing.T) {
+	extraBody := map[string]any{"max_thinking_tokens": 1024, "top_k": 40}
+	p := NewProvider("key", "https://api.deepseek.com/v1", "", WithExtraBody(extraBody))
+	p.SetProviderName("deepseek")
+
+	body := p.buildRequestBody(
+		[]Message{{Role: "user", Content: "hi"}},
+		nil,
+		"deepseek-flash",
+		map[string]any{"thinking_level": "low", "max_tokens": 8192},
+	)
+
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinking = %#v, want map", body["thinking"])
+	}
+	if got := thinking["type"]; got != "enabled" {
+		t.Fatalf("thinking.type = %#v, want enabled", got)
+	}
+	if got := thinking["budget_tokens"]; got != 1024 {
+		t.Fatalf("thinking.budget_tokens = %#v, want 1024", got)
+	}
+	// The knob must not leak into the request body as a top-level field.
+	if _, ok := body["max_thinking_tokens"]; ok {
+		t.Fatalf("max_thinking_tokens must not be sent to the provider, got %#v", body["max_thinking_tokens"])
+	}
+	if got := body["top_k"]; got != 40 {
+		t.Fatalf("top_k = %#v, want 40 (other extra_body fields must survive)", got)
+	}
+	// The caller's map must not be mutated.
+	if _, ok := extraBody["max_thinking_tokens"]; !ok {
+		t.Fatal("WithExtraBody must not mutate the caller's map")
+	}
+}
+
+func TestBuildRequestBody_ThinkingBudgetClampedToMaxTokens(t *testing.T) {
+	p := NewProvider("key", "https://api.deepseek.com/v1", "", WithThinkingBudget(4096))
+	p.SetProviderName("deepseek")
+
+	body := p.buildRequestBody(
+		[]Message{{Role: "user", Content: "hi"}},
+		nil,
+		"deepseek-flash",
+		map[string]any{"thinking_level": "high", "max_tokens": 2048},
+	)
+
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinking = %#v, want map", body["thinking"])
+	}
+	if got := thinking["budget_tokens"]; got != 2047 {
+		t.Fatalf("thinking.budget_tokens = %#v, want 2047 (max_tokens-1)", got)
+	}
+}
+
+func TestBuildRequestBody_ThinkingBudgetPerCallWins(t *testing.T) {
+	p := NewProvider("key", "https://api.deepseek.com/v1", "", WithThinkingBudget(4096))
+	p.SetProviderName("deepseek")
+
+	body := p.buildRequestBody(
+		[]Message{{Role: "user", Content: "hi"}},
+		nil,
+		"deepseek-flash",
+		map[string]any{"thinking_level": "low", "max_tokens": 8192, "max_thinking_tokens": 512},
+	)
+
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinking = %#v, want map", body["thinking"])
+	}
+	if got := thinking["budget_tokens"]; got != 512 {
+		t.Fatalf("thinking.budget_tokens = %#v, want 512 (per-call option)", got)
+	}
+}
+
+func TestBuildRequestBody_NoBudgetWhenThinkingOff(t *testing.T) {
+	p := NewProvider("key", "https://api.deepseek.com/v1", "", WithThinkingBudget(1024))
+	p.SetProviderName("deepseek")
+
+	body := p.buildRequestBody(
+		[]Message{{Role: "user", Content: "hi"}},
+		nil,
+		"deepseek-flash",
+		map[string]any{"thinking_level": "off", "max_tokens": 8192},
+	)
+
+	thinking, ok := body["thinking"].(map[string]any)
+	if !ok {
+		t.Fatalf("thinking = %#v, want map", body["thinking"])
+	}
+	if got := thinking["type"]; got != "disabled" {
+		t.Fatalf("thinking.type = %#v, want disabled", got)
+	}
+	if _, ok := thinking["budget_tokens"]; ok {
+		t.Fatalf("budget_tokens must be omitted when thinking is off, got %#v", thinking["budget_tokens"])
+	}
+}
