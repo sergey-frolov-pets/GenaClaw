@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./pkg/... -count=1 -timeout 15m
+
+  guard-scripts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shell syntax
+        run: |
+          for f in scripts/*.sh; do
+            bash -n "$f" || exit 1
+          done
+
+      - name: python syntax
+        run: |
+          python3 -m py_compile scripts/*.py
+          echo "ok"
+
+      - name: social preview is reproducible
+        run: |
+          cp assets/social-preview.svg /tmp/expected.svg
+          python3 scripts/make_social_preview.py
+          diff -q /tmp/expected.svg assets/social-preview.svg

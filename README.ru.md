@@ -9,6 +9,8 @@
   <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
   <img src="https://img.shields.io/badge/upstream-sipeed%2Fpicoclaw-lightgrey" alt="Upstream">
+  <a href="https://github.com/sergey-frolov-pets/GenaClaw/actions/workflows/ci.yml"><img src="https://github.com/sergey-frolov-pets/GenaClaw/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/sergey-frolov-pets/GenaClaw/actions/workflows/upstream-sync.yml"><img src="https://github.com/sergey-frolov-pets/GenaClaw/actions/workflows/upstream-sync.yml/badge.svg" alt="Синк с upstream"></a>
   <br>
   <a href="https://picoclaw.io"><img src="https://img.shields.io/badge/Сайт-picoclaw.io-blue?style=flat&logo=google-chrome&logoColor=white" alt="Сайт"></a>
   <a href="https://docs.picoclaw.io/"><img src="https://img.shields.io/badge/Документация-007acc?style=flat&logo=read-the-docs&logoColor=white" alt="Документация"></a>
