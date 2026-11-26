@@ -53,7 +53,7 @@ GenaClaw tracks `sipeed/picoclaw` on a weekly schedule:
 
 - **Automatic** — `.github/workflows/upstream-sync.yml` runs every Monday 04:00 UTC: fetches `upstream/main`, merges into a `sync/upstream-YYYYMMDD` branch. Clean merge → pushes to `main`. Conflicts → opens a PR with the conflict list, nothing is force-pushed.
 - **Manual** — `scripts/sync_upstream.sh` does the same locally: `bash scripts/sync_upstream.sh --dry-run` to preview, without the flag to merge and push.
-- **Never clobbered** — `README.md`, `README.ru.md` and `assets/genaclaw*` are ours; the sync keeps them (`--ours`) and reports it. The upstream English README is always readable at `docs/project/README.zh.md`-style paths and in the upstream repo.
+- **Never clobbered** — `README.md`, `README.ru.md` and `assets/genaclaw*` are ours; the sync keeps them (`--ours`) and reports it. Upstream's own README and its translations stay one click away in the [upstream repo](https://github.com/sipeed/picoclaw); upstream docs live under `docs/` in both repos.
 
 ## Build and run
 
