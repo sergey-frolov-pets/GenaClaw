@@ -370,3 +370,37 @@ func (al *AgentLoop) handleReasoning(
 		}
 	}
 }
+
+// publishStallNotice сообщает в чат, что работа идёт (этап E плана памяти).
+// Повод: watchdog тишины увидел, что ход не подаёт признаков жизни дольше
+// порога. Сообщение одно на ход (см. TurnCheckpointStore.MarkNoticed) и не
+// прерывает работу: PublishOutbound вызывается с коротким таймаутом, ошибки
+// шины только логируются.
+func (al *AgentLoop) publishStallNotice(ctx context.Context, cp TurnCheckpoint) {
+	text := StallNoticeText(cp)
+	if text == "" || strings.TrimSpace(cp.Channel) == "" || strings.TrimSpace(cp.ChatID) == "" {
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	pubCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	msg := bus.OutboundMessage{
+		Context:    bus.NewOutboundContext(cp.Channel, cp.ChatID, ""),
+		AgentID:    cp.AgentID,
+		SessionKey: cp.SessionKey,
+		Content:    text,
+	}
+	if err := al.bus.PublishOutbound(pubCtx, msg); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) ||
+			errors.Is(err, bus.ErrBusClosed) {
+			return
+		}
+		logger.WarnCF("agent", "failed to publish stall notice", map[string]any{
+			"session_key": cp.SessionKey,
+			"turn_id":     cp.TurnID,
+			"error":       err.Error(),
+		})
+	}
+}

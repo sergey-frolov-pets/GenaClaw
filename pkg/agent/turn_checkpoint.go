@@ -51,6 +51,12 @@ type TurnCheckpoint struct {
 	StartedAt   time.Time `json:"started_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	StalledForS float64   `json:"stalled_for_s,omitempty"`
+	// ResumeCount — сколько раз этот ход уже пытались продолжить после обрыва.
+	// Больше PICOCLAW_TURN_RESUME_MAX_TURNS раз не возобновляем, чтобы не
+	// крутить одно и то же.
+	ResumeCount int `json:"resume_count,omitempty"`
+	// NoticeSent — в чат уже ушла подсказка «всё ещё работаю» по этому ходу.
+	NoticeSent bool `json:"notice_sent,omitempty"`
 }
 
 // TurnCheckpointStore пишет чекпойнты и ищет зависшие ходы.
@@ -69,6 +75,10 @@ type TurnCheckpointStore struct {
 const (
 	envTurnCheckpoint         = "PICOCLAW_TURN_CHECKPOINT"          // off|0|false — выключить
 	envTurnCheckpointKeepDays = "PICOCLAW_TURN_CHECKPOINT_KEEP_DAYS" // дней хранить (по умолчанию 7)
+	envTurnResume             = "PICOCLAW_TURN_RESUME"               // off|0|false — не возобновлять
+	envTurnResumeMaxTurns     = "PICOCLAW_TURN_RESUME_MAX_TURNS"     // попыток возобновления (по умолчанию 1)
+	envTurnResumeMinAgeS      = "PICOCLAW_TURN_RESUME_MIN_AGE_S"     // тишина, после которой ход считается оборванным
+	envTurnNotice             = "PICOCLAW_TURN_NOTICE"               // off|0|false — не писать в чат о тишине
 )
 
 func envInt(name string, def int) int {
@@ -324,21 +334,29 @@ func (s *TurnCheckpointStore) write(sessionKey string, cp TurnCheckpoint) {
 	if !s.Enabled() {
 		return
 	}
+	if err := s.writeFile(sessionKey, cp); err != nil {
+		return
+	}
+	s.appendJournal(sessionKey, cp)
+}
+
+// writeFile атомарно переписывает снимок хода (без журнала).
+func (s *TurnCheckpointStore) writeFile(sessionKey string, cp TurnCheckpoint) error {
 	data, err := json.MarshalIndent(cp, "", "  ")
 	if err != nil {
-		return
+		return err
 	}
 	path := filepath.Join(s.dir, safeSessionFile(sessionKey)+".json")
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		logger.WarnCF("agent", "checkpoint write failed", map[string]any{"error": err.Error()})
-		return
+		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		logger.WarnCF("agent", "checkpoint rename failed", map[string]any{"error": err.Error()})
-		return
+		return err
 	}
-	s.appendJournal(sessionKey, cp)
+	return nil
 }
 
 // appendJournal дописывает шаг хода в журнал <session>-<turn>.jsonl.
@@ -422,6 +440,195 @@ func (s *TurnCheckpointStore) Stale(stallAfter time.Duration) []TurnCheckpoint {
 		out = append(out, *cp)
 	}
 	return out
+}
+
+// boolEnvOff сообщает, выключен ли механизм переменной окружения.
+func boolEnvOff(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
+	case "off", "0", "false", "no", "disable", "disabled":
+		return true
+	}
+	return false
+}
+
+// =============================================================================
+// Этап D: возобновление после обрыва
+// =============================================================================
+//
+// Читаем снимок с диска, а не из памяти: после рестарта gateway карта пуста,
+// и «оборванный ход» виден только в файле. Ход считается оборванным, если
+// статус running|stalled и с последнего шага прошло больше minAge. Каждый
+// ход возобновляется не больше maxTurns раз (по умолчанию один), чтобы
+// сломанный инструмент не крутился бесконечно.
+
+func (s *TurnCheckpointStore) ResumeHint(sessionKey string) string {
+	if !s.Enabled() || boolEnvOff(envTurnResume) || boolEnvOff(envTurnCheckpoint) {
+		return ""
+	}
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(s.dir, safeSessionFile(sessionKey)+".json"))
+	if err != nil {
+		return ""
+	}
+	var cp TurnCheckpoint
+	if unmarshalErr := json.Unmarshal(data, &cp); unmarshalErr != nil {
+		return ""
+	}
+	if cp.Status != "running" && cp.Status != "stalled" {
+		return ""
+	}
+	if cp.UpdatedAt.IsZero() {
+		return ""
+	}
+	age := s.now().Sub(cp.UpdatedAt)
+	minAge := time.Duration(envInt(envTurnResumeMinAgeS, 90)) * time.Second
+	if age < minAge {
+		return ""
+	}
+	if cp.ResumeCount >= envInt(envTurnResumeMaxTurns, 1) {
+		logger.InfoCF("agent", "turn resume skipped: limit reached", map[string]any{
+			"session":      sessionKey,
+			"turn_id":      cp.TurnID,
+			"resume_count": cp.ResumeCount,
+		})
+		return ""
+	}
+	cp.ResumeCount++
+	if err := s.writeFile(sessionKey, cp); err != nil {
+		return ""
+	}
+	logger.InfoCF("agent", "turn resumed after interruption", map[string]any{
+		"session":       sessionKey,
+		"turn_id":       cp.TurnID,
+		"phase":         cp.Phase,
+		"iteration":     cp.Iteration,
+		"last_tool":     cp.LastTool,
+		"stalled_for_s": int(age.Seconds()),
+		"resume_count":  cp.ResumeCount,
+	})
+	return resumeHintText(cp, age)
+}
+
+func resumeHintText(cp TurnCheckpoint, age time.Duration) string {
+	var b strings.Builder
+	b.WriteString("⚠️ Предыдущий ход в этой сессии оборвался и не завершился: ")
+	b.WriteString("фаза «")
+	b.WriteString(phaseLabel(cp.Phase))
+	b.WriteString("»")
+	if cp.Iteration > 0 {
+		b.WriteString(", итерация ")
+		b.WriteString(strconv.Itoa(cp.Iteration))
+	}
+	if cp.LastTool != "" {
+		b.WriteString(", последний инструмент ")
+		b.WriteString(cp.LastTool)
+	}
+	b.WriteString(", тишина ")
+	b.WriteString(humanDuration(age))
+	b.WriteString(". Продолжи с этого места: не повторяй уже выполненные шаги, ")
+	b.WriteString("сначала проверь результат последнего инструмента (файл, команда) ")
+	b.WriteString("и скажи коротко, что нашёл и что делаешь дальше. ")
+	b.WriteString("Если состояние проверить нельзя — так и напиши.")
+	return b.String()
+}
+
+func phaseLabel(phase string) string {
+	switch phase {
+	case "start":
+		return "начало хода"
+	case "llm":
+		return "ожидание модели"
+	case "llm_done":
+		return "ответ модели получен"
+	case "tools":
+		return "выполнение инструмента"
+	case "tools_done":
+		return "инструмент завершён"
+	case "compact":
+		return "сжатие истории"
+	case "end":
+		return "финал"
+	case "error":
+		return "ошибка"
+	}
+	if phase == "" {
+		return "неизвестно"
+	}
+	return phase
+}
+
+func humanDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	sec := int(d.Seconds())
+	switch {
+	case sec < 60:
+		return strconv.Itoa(sec) + " с"
+	case sec < 3600:
+		return strconv.Itoa(sec/60) + " мин " + strconv.Itoa(sec%60) + " с"
+	default:
+		return strconv.Itoa(sec/3600) + " ч " + strconv.Itoa((sec%3600)/60) + " мин"
+	}
+}
+
+// =============================================================================
+// Этап E: подсказка в чат при долгой тишине
+// =============================================================================
+
+// MarkNoticed помечает ход как «о тишине уже сообщили». Возвращает true,
+// если сообщение нужно отправить сейчас (ровно один раз за ход).
+func (s *TurnCheckpointStore) MarkNoticed(sessionKey string) bool {
+	if !s.Enabled() || boolEnvOff(envTurnNotice) {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := s.turns[sessionKey]
+	if cp == nil || cp.NoticeSent {
+		return false
+	}
+	cp.NoticeSent = true
+	return true
+}
+
+// StallNoticeText — текст сообщения в чат о долгой тишине.
+func StallNoticeText(cp TurnCheckpoint) string {
+	if cp.SessionKey == "" {
+		return ""
+	}
+	what := "идёт работа"
+	switch cp.Phase {
+	case "start":
+		what = "начинаю ход"
+	case "llm", "llm_done":
+		what = "жду ответа модели"
+	case "tools":
+		if cp.LastTool != "" {
+			what = "выполняю " + cp.LastTool
+		} else {
+			what = "выполняю инструмент"
+		}
+	case "compact":
+		what = "сжимаю историю"
+	}
+	var b strings.Builder
+	b.WriteString("⏳ Всё ещё работаю: ")
+	b.WriteString(what)
+	if cp.Iteration > 0 {
+		b.WriteString(" (итерация ")
+		b.WriteString(strconv.Itoa(cp.Iteration))
+		b.WriteString(")")
+	}
+	if cp.StalledForS > 0 {
+		b.WriteString(", тишина ")
+		b.WriteString(humanDuration(time.Duration(cp.StalledForS) * time.Second))
+	}
+	b.WriteString(". Продолжаю; если застряну — напишу отдельно.")
+	return b.String()
 }
 
 // Finish помечает ход завершённым (вызывается на turn.end).

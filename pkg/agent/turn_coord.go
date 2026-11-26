@@ -30,6 +30,13 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState, pipeline *Pipel
 
 	al.registerActiveTurn(ts)
 	defer al.clearActiveTurn(ts)
+	defer ts.clearTurnStamp()
+
+	// Этап D: если в сессии остался оборванный ход — подсказываем модели
+	// продолжить с места обрыва. Подсказка живёт только в этом ходе.
+	if al.checkpoints != nil {
+		ts.resumeHint = al.checkpoints.ResumeHint(ts.sessionKey)
+	}
 
 	if al.takePendingStop(ts.sessionKey) {
 		_ = ts.requestHardAbort()

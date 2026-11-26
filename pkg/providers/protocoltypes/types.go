@@ -97,6 +97,11 @@ type Message struct {
 	ToolCalls        []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID       string         `json:"tool_call_id,omitempty"`
 
+	// TurnID связывает сообщение с ходом, в котором оно появилось. Пишется
+	// только в JSONL сессии (аддитивно, старые записи читаются без него);
+	// провайдерам не уходит — адаптеры собирают тело запроса сами.
+	TurnID string `json:"turn_id,omitempty"`
+
 	// Prompt metadata is internal to the agent runtime. It records where a
 	// message or system part came from without changing provider/session JSON.
 	PromptLayer  string `json:"-"`

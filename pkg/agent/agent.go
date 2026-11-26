@@ -155,6 +155,11 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 		// Watchdog тишины: если running-ход не подаёт признаков жизни дольше
 		// порога, пишем предупреждение и событие agent.turn.stalled.
 		go al.checkpoints.Watchdog(ctx, 15*time.Second, 45*time.Second, func(cp TurnCheckpoint) {
+			// Этап E: один раз за ход коротко сообщаем в чат, что работа идёт,
+			// чтобы тишина не выглядела как зависание.
+			if al.checkpoints.MarkNoticed(cp.SessionKey) {
+				al.publishStallNotice(ctx, cp)
+			}
 			al.emitEvent(
 				runtimeevents.KindAgentTurnStalled,
 				HookMeta{AgentID: cp.AgentID, SessionKey: cp.SessionKey, TurnID: cp.TurnID},

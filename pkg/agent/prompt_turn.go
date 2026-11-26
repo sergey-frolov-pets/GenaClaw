@@ -26,7 +26,7 @@ func promptBuildRequestForTurn(
 		SenderID:          ts.opts.Dispatch.SenderID(),
 		SenderDisplayName: ts.opts.SenderDisplayName,
 		ActiveSkills:      activeSkillNames(ts.agent, ts.opts),
-		Overlays:          promptOverlaysForOptions(ts.opts),
+		Overlays:          promptOverlaysForTurn(ts),
 	}
 	hasCallableTools := true
 	if ts.profile.Enabled {
@@ -114,6 +114,26 @@ func promptBuildRequestForProcessOptions(
 		req.AllowedTools = append([]string(nil), profile.AllowedTools...)
 	}
 	return req
+}
+
+func promptOverlaysForTurn(ts *turnState) []PromptPart {
+	overlays := promptOverlaysForOptions(ts.opts)
+	hint := strings.TrimSpace(ts.resumeHint)
+	if hint == "" {
+		return overlays
+	}
+	// Этап D: подсказка «продолжи с места обрыва» — только в промпт текущего
+	// хода, в историю сессии не пишется, чтобы не копилась.
+	return append(overlays, PromptPart{
+		ID:      "instruction.turn_resume",
+		Layer:   PromptLayerInstruction,
+		Slot:    PromptSlotWorkspace,
+		Source:  PromptSource{ID: PromptSourceTurnResume, Name: "turn.resume"},
+		Title:   "Resumed Turn",
+		Content: hint,
+		Stable:  false,
+		Cache:   PromptCacheNone,
+	})
 }
 
 func promptOverlaysForOptions(opts processOptions) []PromptPart {

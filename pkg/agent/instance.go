@@ -40,6 +40,7 @@ type AgentInstance struct {
 	SummarizeTokenPercent     int
 	Provider                  providers.LLMProvider
 	Sessions                  session.SessionStore
+	turnStamps                *turnStampStore
 	ContextBuilder            *ContextBuilder
 	Tools                     *tools.ToolRegistry
 	Definition                AgentContextDefinition
@@ -338,6 +339,9 @@ func NewAgentInstance(
 		}
 	}
 
+	stampedSessions := wrapWithTurnStamp(sessions)
+	stamps := newTurnStampStore(sessions)
+
 	return &AgentInstance{
 		modelMu:                   &sync.RWMutex{},
 		ID:                        agentID,
@@ -355,7 +359,8 @@ func NewAgentInstance(
 		SummarizeMessageThreshold: summarizeMessageThreshold,
 		SummarizeTokenPercent:     summarizeTokenPercent,
 		Provider:                  provider,
-		Sessions:                  sessions,
+		Sessions:                  stampedSessions,
+		turnStamps:                stamps,
 		ContextBuilder:            contextBuilder,
 		Tools:                     toolsRegistry,
 		Definition:                definition,

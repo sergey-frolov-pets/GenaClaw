@@ -219,6 +219,10 @@ type turnState struct {
 	userMessage string
 	media       []string
 
+	// resumeHint — подсказка «продолжи с места обрыва» (этап D). Подставляется
+	// в системную часть промпта один раз за ход и в сессию не пишется.
+	resumeHint string
+
 	phase        TurnPhase
 	iteration    int
 	startedAt    time.Time
@@ -295,6 +299,12 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	// Bind session store and capture initial history length for rollback logic
 	if agent != nil && agent.Sessions != nil {
 		ts.session = agent.Sessions
+		// turn_id в записях сессии (этап C): пока ход идёт, сообщения помечаются.
+		// Только для настоящего стора агента: у под-агента стор эфемерный,
+		// и штамповать там нечего.
+		if st, ok := agent.Sessions.(turnSetter); ok && st != nil {
+			st.SetTurn(opts.Dispatch.SessionKey, scope.turnID)
+		}
 		history := agent.Sessions.GetHistory(opts.Dispatch.SessionKey)
 		ts.initialHistoryLength = len(history)
 		ts.restorePointHistory = append([]providers.Message(nil), history...)

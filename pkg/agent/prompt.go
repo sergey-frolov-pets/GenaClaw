@@ -60,6 +60,7 @@ const (
 	PromptSourceSubTurnProfile PromptSourceID = "subturn.profile"
 	PromptSourceUserMessage    PromptSourceID = "turn:user_message"
 	PromptSourceSteering       PromptSourceID = "turn:steering"
+	PromptSourceTurnResume     PromptSourceID = "turn:resume"
 	PromptSourceSubTurnResult  PromptSourceID = "turn:subturn_result"
 	PromptSourceToolResult     PromptSourceID = "turn:tool_result"
 	PromptSourceInterrupt      PromptSourceID = "turn:interrupt"
