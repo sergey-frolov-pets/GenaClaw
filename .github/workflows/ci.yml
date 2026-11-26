@@ -13,6 +13,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Теги как в upstream (Makefile, pr.yml): goolm — чистый Go вместо cgo-libolm,
+  # stdjson — стандартный encoding/json. Без них нужен libolm-dev в системе.
+  GOFLAGS: -tags=goolm,stdjson
+
 jobs:
   build-test:
     runs-on: ubuntu-latest
