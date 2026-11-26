@@ -296,7 +296,7 @@ func TestHandleGetSession_JSONLStorage(t *testing.T) {
 	}
 }
 
-func TestHandleGetSession_HidesHandledToolAttachmentsBackedByMediaRefs(t *testing.T) {
+func TestHandleGetSession_KeepsHandledToolAttachmentsBackedByMediaRefs(t *testing.T) {
 	configPath, cleanup := setupOAuthTestEnv(t)
 	defer cleanup()
 
@@ -344,11 +344,23 @@ func TestHandleGetSession_HidesHandledToolAttachmentsBackedByMediaRefs(t *testin
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 
-	if len(resp.Messages) != 1 {
-		t.Fatalf("len(resp.Messages) = %d, want 1", len(resp.Messages))
+	if len(resp.Messages) != 2 {
+		t.Fatalf("len(resp.Messages) = %d, want 2", len(resp.Messages))
 	}
 	if resp.Messages[0].Role != "user" || resp.Messages[0].Content != "send me the report" {
-		t.Fatalf("message = %#v, want only user request", resp.Messages[0])
+		t.Fatalf("message = %#v, want user request first", resp.Messages[0])
+	}
+	// media:// refs are durable now: the store copies every file (any kind) and
+	// persists the ref table, so the attachment must survive in history.
+	attachments := resp.Messages[1].Attachments
+	if len(attachments) != 1 {
+		t.Fatalf("len(attachments) = %d, want 1", len(attachments))
+	}
+	if attachments[0].URL != "media://attachment-1" {
+		t.Fatalf("attachment url = %q, want durable media ref", attachments[0].URL)
+	}
+	if attachments[0].Filename != "report.txt" {
+		t.Fatalf("attachment filename = %q, want report.txt", attachments[0].Filename)
 	}
 }
 

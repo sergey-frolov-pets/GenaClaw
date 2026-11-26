@@ -1121,6 +1121,11 @@ type MediaCleanupConfig struct {
 	ToolConfig `    envPrefix:"PICOCLAW_MEDIA_CLEANUP_"`
 	MaxAge     int `                                    json:"max_age_minutes"  env:"PICOCLAW_MEDIA_CLEANUP_MAX_AGE"`
 	Interval   int `                                    json:"interval_minutes" env:"PICOCLAW_MEDIA_CLEANUP_INTERVAL"`
+	// Dir is the durable media directory (defaults to <picoclaw home>/media).
+	// Stored files are copied there and the ref table is persisted, so refs in
+	// chat history survive restarts for every media kind.
+	Dir        string `                                    json:"dir"              env:"PICOCLAW_MEDIA_CLEANUP_DIR"`
+	MaxTotalMB int    `                                    json:"max_total_mb"     env:"PICOCLAW_MEDIA_CLEANUP_MAX_TOTAL_MB"`
 }
 
 type ReadFileToolConfig struct {

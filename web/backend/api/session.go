@@ -640,10 +640,10 @@ func sessionAttachmentURL(attachment providers.Attachment) (string, bool) {
 		return "", false
 	}
 	if strings.HasPrefix(ref, "media://") {
-		// Persisted session history must only expose durable attachment locations.
-		// media:// refs depend on the live in-memory MediaStore and may stop
-		// resolving after a restart or cleanup, so omit them from reopened history.
-		return "", false
+		// Media refs are durable: the store keeps every file (any kind, not
+		// only images) in its own directory and persists the ref table, so a
+		// ref saved in history still resolves after a restart.
+		return ref, true
 	}
 	return ref, true
 }

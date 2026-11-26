@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -444,9 +445,11 @@ func setupAndStartServices(
 	fmt.Println("✓ Heartbeat service started")
 
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
-		Enabled:  cfg.Tools.MediaCleanup.Enabled,
-		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Enabled:       cfg.Tools.MediaCleanup.Enabled,
+		MaxAge:        time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
+		Interval:      time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Dir:           mediaStoreDir(cfg),
+		MaxTotalBytes: int64(cfg.Tools.MediaCleanup.MaxTotalMB) * 1024 * 1024,
 	})
 	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 		fms.Start()
@@ -692,9 +695,11 @@ func restartServices(
 	fmt.Println("  ✓ Heartbeat service restarted")
 
 	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
-		Enabled:  cfg.Tools.MediaCleanup.Enabled,
-		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Enabled:       cfg.Tools.MediaCleanup.Enabled,
+		MaxAge:        time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
+		Interval:      time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+		Dir:           mediaStoreDir(cfg),
+		MaxTotalBytes: int64(cfg.Tools.MediaCleanup.MaxTotalMB) * 1024 * 1024,
 	})
 	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
 		fms.Start()
@@ -882,4 +887,14 @@ func createHeartbeatHandler(agentLoop *agent.AgentLoop) func(prompt, channel, ch
 		}
 		return tools.SilentResult(response)
 	}
+}
+
+// mediaStoreDir returns the durable media directory. Every attachment (image,
+// audio, video, document, archive - any kind) is copied there and the ref table
+// is persisted, so refs stored in chat history keep resolving across restarts.
+func mediaStoreDir(cfg *config.Config) string {
+	if dir := strings.TrimSpace(cfg.Tools.MediaCleanup.Dir); dir != "" {
+		return dir
+	}
+	return filepath.Join(config.GetHome(), "media")
 }

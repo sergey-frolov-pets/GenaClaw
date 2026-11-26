@@ -325,8 +325,9 @@ func DefaultConfig() *Config {
 				ToolConfig: ToolConfig{
 					Enabled: true,
 				},
-				MaxAge:   30,
-				Interval: 5,
+				MaxAge:     30,
+				Interval:   5,
+				MaxTotalMB: 2048,
 			},
 			Web: WebToolsConfig{
 				ToolConfig: ToolConfig{
