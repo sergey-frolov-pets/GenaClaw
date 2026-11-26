@@ -56,6 +56,7 @@ GenaClaw tracks `sipeed/picoclaw` on a weekly schedule:
 - **Automatic** — `.github/workflows/upstream-sync.yml` runs every Monday 04:00 UTC: fetches `upstream/main`, merges into a `sync/upstream-YYYYMMDD` branch. Clean merge → pushes to `main`. Conflicts → opens a PR with the conflict list, nothing is force-pushed.
 - **Manual** — `scripts/sync_upstream.sh` does the same locally: `bash scripts/sync_upstream.sh --dry-run` to preview, without the flag to merge and push.
 - **Never clobbered** — `README.md`, `README.ru.md` and `assets/genaclaw*` are ours; the sync keeps them (`--ours`) and reports it. Upstream's own README and its translations stay one click away in the [upstream repo](https://github.com/sipeed/picoclaw); upstream docs live under `docs/` in both repos.
+- **Only two workflows run here** — `ci` and `upstream-sync`. Upstream's `build`, `pr`, `release`, `create-tag`, `create_dmg`, `docker-build`, `nightly`, `stale` and `upload-tos` stay in the tree so the next sync is clean, but they are disabled in this repository's Actions settings: a fork should not publish Sipeed's images or tags by accident.
 
 ## Build and run
 

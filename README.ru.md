@@ -56,6 +56,7 @@ GenaClaw тянет `sipeed/picoclaw` по расписанию:
 - **Автоматически** — `.github/workflows/upstream-sync.yml`, каждый понедельник в 04:00 UTC: забирает `upstream/main`, мержит в ветку `sync/upstream-YYYYMMDD`. Чистый мерж → пуш в `main`. Конфликты → PR со списком конфликтов; force-push не делается никогда.
 - **Вручную** — `scripts/sync_upstream.sh`: `bash scripts/sync_upstream.sh --dry-run` покажет, что придёт; без флага — смержит и запушит.
 - **Не затирается** — `README.md`, `README.ru.md` и `assets/genaclaw*` наши: синк сохраняет их (`--ours`) и пишет об этом в отчёте.
+- **Работают только два воркфлоу** — `ci` и `upstream-sync`. Апстримные `build`, `pr`, `release`, `create-tag`, `create_dmg`, `docker-build`, `nightly`, `stale`, `upload-tos` остаются в дереве, чтобы синк был чистым, но выключены в настройках Actions этого репозитория: форк не должен случайно публиковать образы и теги Sipeed.
 
 ## Сборка и запуск
 
