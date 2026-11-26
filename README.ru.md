@@ -71,6 +71,8 @@ go build -o build/picoclaw ./cmd/picoclaw   # Go 1.25+
 
 `make build` и Docker-образы работают как в upstream. Требования и полный справочник CLI: [docs.picoclaw.io](https://docs.picoclaw.io/).
 
+Тесты: `go test ./pkg/...`. Запускать от обычного пользователя: часть проверок в `pkg/evolution` делает каталог read-only через `chmod`, чтобы вызвать ошибку записи, а root эти биты игнорирует — под root/sudo тест падает не по делу.
+
 ## Структура
 
 Дерево как в upstream: `cmd/` (точки входа), `pkg/` (agent, провайдеры, каналы, инструменты, память, MCP), `web/` (веб-клиент Pico), `skills/`, `workspace/`, `docs/`.

@@ -71,6 +71,8 @@ go build -o build/picoclaw ./cmd/picoclaw   # Go 1.25+
 
 `make build` and the Docker images work as in upstream. Requirements and the full CLI reference: [docs.picoclaw.io](https://docs.picoclaw.io/).
 
+Tests: `go test ./pkg/...`. Run them as a regular user — a few checks in `pkg/evolution` make a directory read-only via `chmod` to force a write failure, and root ignores those bits, so under root/sudo they fail for the wrong reason.
+
 ## Layout
 
 Same tree as upstream: `cmd/` (entry points), `pkg/` (agent, providers, channels, tools, memory, MCP), `web/` (Pico web client), `skills/`, `workspace/`, `docs/`.
