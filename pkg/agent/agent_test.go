@@ -2256,6 +2256,11 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	// send_file only delivers files from allowed roots (media temp dir or
 	// workspace), so the fixture lives in a unique subdirectory that is removed
 	// after the test instead of polluting the shared media directory.
+	// The shared media dir may not exist yet (fresh CI runner), and MkdirTemp
+	// requires its parent to be present.
+	if err := os.MkdirAll(media.TempDir(), 0o700); err != nil {
+		t.Fatalf("MkdirAll(media.TempDir()) error = %v", err)
+	}
 	mediaDir, err := os.MkdirTemp(media.TempDir(), "artifact-test-")
 	if err != nil {
 		t.Fatalf("MkdirTemp(media) error = %v", err)
