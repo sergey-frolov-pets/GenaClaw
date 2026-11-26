@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """Собирает assets/social-preview.svg (1280x640, шапка репозитория) из assets/genaclaw.svg.
 
-Иконка встраивается в SVG как есть (пути + градиент), поэтому файл самодостаточен:
-его одинаково рисуют GitHub, браузер и cairosvg — без внешних ссылок на PNG.
+Иконка встраивается в SVG целиком: градиенты из `<defs>` исходника плюс всё, что стоит
+между `</defs>` и `</svg>` (фоновая плашка и слои с путями). Поэтому файл самодостаточен —
+его одинаково рисуют GitHub, браузер и cairosvg, без внешних ссылок на PNG.
+
+Скрипт не разбирает внутренности логотипа: поменяли genaclaw.svg — пересобрали шапку.
 
     python3 scripts/make_social_preview.py            # пересобрать SVG
     python3 scripts/make_social_preview.py --png      # ещё и social-preview.png 1280x640
@@ -25,31 +28,29 @@ ICON_X, ICON_Y = 64, 64
 ICON_SCALE = ICON_SIZE / 937
 
 
-def extract_icon(svg: str) -> tuple[str, str, str]:
-    """Возвращает (градиент, фоновая плашка, группа с путями) исходной иконки."""
-    gradient = re.search(r'<linearGradient id="bg".*?</linearGradient>', svg, re.S)
-    if not gradient:
-        raise SystemExit("в genaclaw.svg не найден градиент id=bg")
+def extract_icon(svg: str) -> tuple[str, str]:
+    """Возвращает (содержимое <defs>, всё после </defs> до </svg>) исходной иконки."""
+    defs = re.search(r"<defs[^>]*>(.*?)</defs>", svg, re.S)
+    if not defs:
+        raise SystemExit("в genaclaw.svg не найден блок <defs>")
 
-    plate = re.search(r'<rect width="937" height="937"[^>]*fill="url\(#bg\)"[^>]*/>', svg)
-    if not plate:
-        raise SystemExit("в genaclaw.svg не найдена фоновая плашка")
+    end = svg.rfind("</svg>")
+    if end == -1:
+        raise SystemExit("в genaclaw.svg не найден закрывающий </svg>")
+    body = svg[defs.end() : end].strip()
+    if not body:
+        raise SystemExit("в genaclaw.svg нет содержимого после </defs>")
 
-    group = re.search(r'<g clip-path="url\(#frame\)">(.*)</g>\s*</svg>', svg, re.S)
-    if not group:
-        raise SystemExit("в genaclaw.svg не найдена группа с путями")
-
-    grad = gradient.group(0).replace('id="bg"', 'id="iconbg"').replace('url(#bg)', 'url(#iconbg)')
-    plate_svg = plate.group(0).replace('url(#bg)', 'url(#iconbg)')
-    paths = re.sub(r'\s*clip-path="url\(#frame\)"', "", group.group(1)).strip()
-    return grad, plate_svg, paths
+    return defs.group(1).strip(), body
 
 
 TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640"
+     xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+     xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
      role="img" aria-label="GenaClaw — a working fork of PicoClaw">
   <title>GenaClaw</title>
   <defs>
-{gradient}
+{icon_defs}
     <linearGradient id="page" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#0d3a1b"/>
       <stop offset="55%" stop-color="#12522a"/>
@@ -67,8 +68,7 @@ TEMPLATE = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" wid
 
   <g clip-path="url(#iconslot)">
     <g transform="translate({x},{y}) scale({scale:.6f})">
-      {plate}
-      {paths}
+      {icon_body}
     </g>
   </g>
 
@@ -94,12 +94,11 @@ def main() -> int:
     parser.add_argument("--png", action="store_true", help="отрендерить social-preview.png 1280x640")
     args = parser.parse_args()
 
-    gradient, plate, paths = extract_icon(SOURCE.read_text(encoding="utf-8"))
+    icon_defs, icon_body = extract_icon(SOURCE.read_text(encoding="utf-8"))
     TARGET.write_text(
         TEMPLATE.format(
-            gradient=gradient,
-            plate=plate,
-            paths=paths,
+            icon_defs=icon_defs,
+            icon_body=icon_body,
             x=ICON_X,
             y=ICON_Y,
             size=ICON_SIZE,
