@@ -193,9 +193,8 @@ func TestShellTool_DangerousCommand_KillBlocked(t *testing.T) {
 
 // TestShellTool_GuardAllowsOwnScripts verifies that constructs used by our own
 // scripts are not rejected: ${VAR}, $(...), backticks, `chmod 755`.
-// `source *.sh` and `git push` stay blocked on purpose (see
-// TestShellTool_GuardStillBlocksDangerous): sourcing an arbitrary script is code
-// execution, and pushes go through scripts/git_sync.sh.
+// Destructive pushes and sourcing scripts from outside the workspace stay
+// blocked (see TestShellTool_GuardGitPush and TestShellTool_GuardSourcedScripts).
 func TestShellTool_GuardAllowsOwnScripts(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	if err != nil {
@@ -237,9 +236,17 @@ func TestShellTool_GuardStillBlocksDangerous(t *testing.T) {
 		"mkfs.ext4 /dev/sdb1",
 		"shutdown -h now",
 		// deliberate blocks, kept after the guard review:
-		"source scripts/backup.sh",
-		"git push origin main",
 		"chmod 4755 scripts/restart_gateway.sh",
+		// destructive pushes stay blocked (plain `git push` is allowed now,
+		// see TestShellTool_GuardGitPush)
+		"git push --force origin main",
+		"git push -f origin main",
+		"git push --mirror origin",
+		"git push origin +main",
+		"git push --delete origin v1",
+		// sourcing outside the workspace stays blocked
+		"source /etc/profile.sh",
+		"source ../outside.sh",
 	}
 	for _, cmd := range blocked {
 		r := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})
@@ -2055,5 +2062,85 @@ func TestShellTool_CustomAllowDoesNotBecomeStrictAllowlist(t *testing.T) {
 	got := tool.guardCommand("ls", t.TempDir())
 	if got != "" {
 		t.Fatalf("custom allow patterns should not become a strict allowlist, got: %q", got)
+	}
+}
+
+// TestShellTool_GuardGitPush verifies the narrowed push guard: ordinary pushes
+// pass, destructive variants (force, mirror, delete, --all, forced refspec)
+// stay blocked. The guard is called directly — running a push in a test would
+// touch a real remote.
+func TestShellTool_GuardGitPush(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+	cwd := t.TempDir()
+
+	allowed := []string{
+		"git push",
+		"git push origin main",
+		"git push -u origin feat/vk-plugin",
+		"git push origin HEAD:refs/heads/topic",
+		"cd /root/x && git push origin main",
+	}
+	for _, cmd := range allowed {
+		if msg := tool.guardCommand(cmd, cwd); msg != "" {
+			t.Errorf("guard must allow %q, got: %s", cmd, msg)
+		}
+	}
+
+	blocked := []string{
+		"git push --force origin main",
+		"git push --force-with-lease origin main",
+		"git push -f",
+		"git push --mirror origin",
+		"git push --delete origin v1",
+		"git push --all origin",
+		"git push origin +main",
+	}
+	for _, cmd := range blocked {
+		if msg := tool.guardCommand(cmd, cwd); msg == "" {
+			t.Errorf("guard must block %q, got empty message", cmd)
+		}
+	}
+}
+
+// TestShellTool_GuardSourcedScripts verifies that `source` is limited to
+// scripts inside the workspace and that dynamic paths fail closed.
+func TestShellTool_GuardSourcedScripts(t *testing.T) {
+	tool, err := NewExecTool("", false)
+	if err != nil {
+		t.Fatalf("unable to configure exec tool: %s", err)
+	}
+	cwd := t.TempDir()
+
+	allowed := []string{
+		"source env.sh",
+		"source ./scripts/backup.sh",
+		`source "scripts/with space.sh"`,
+		"source " + cwd + "/absolute.sh",
+		"cd /root/.picoclaw/workspace && source scripts/git_sync.sh",
+	}
+	for _, cmd := range allowed {
+		if msg := tool.guardCommand(cmd, cwd); msg != "" {
+			t.Errorf("guard must allow %q, got: %s", cmd, msg)
+		}
+	}
+
+	blocked := []string{
+		"source /etc/profile.sh",
+		"source ../outside.sh",
+		"source scripts/../../escape.sh",
+		"source $HOME/x.sh",
+		"source ${SCRIPT}",
+		"source `pwd`/x.sh",
+		"source ~/x.sh",
+		"source scripts/*.sh",
+		"source -x y.sh",
+	}
+	for _, cmd := range blocked {
+		if msg := tool.guardCommand(cmd, cwd); msg == "" {
+			t.Errorf("guard must block %q, got empty message", cmd)
+		}
 	}
 }

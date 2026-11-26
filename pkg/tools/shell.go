@@ -95,11 +95,17 @@ var (
 		regexp.MustCompile(`\bdnf\s+(install|remove)\b`),
 		regexp.MustCompile(`\bdocker\s+run\b`),
 		regexp.MustCompile(`\bdocker\s+exec\b`),
-		regexp.MustCompile(`\bgit\s+push\b`),
+		// Pushes are ordinary work now (scripts/git_sync.sh does them), so only
+		// the destructive variants stay blocked: force / force-with-lease,
+		// mirror, delete, --all, and refspecs forced with a leading "+".
+		regexp.MustCompile(`\bgit\s+push\b[^|;&]*\s(--force(-with-lease)?|--mirror|--delete|--all|-f)\b`),
+		regexp.MustCompile(`\bgit\s+push\b[^|;&]*\s\+`),
 		regexp.MustCompile(`\bgit\s+force\b`),
 		regexp.MustCompile(`\bssh\b.*@`),
 		regexp.MustCompile(`\beval\b`),
-		regexp.MustCompile(`\bsource\s+.*\.sh\b`),
+		// `source file` no longer sits here: sourcing is allowed for scripts
+		// inside the workspace, and the path is validated by
+		// checkSourcedScripts (shell_guard_source.go).
 	}
 
 	// windowsDenyPatterns contains PowerShell-specific deny patterns that only
@@ -1176,6 +1182,10 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 			if msg := checkInlineCommands(lower, t.denyPatterns); msg != "" {
 				return msg
 			}
+		}
+		// Sourcing is allowed for scripts inside the workspace only.
+		if msg := checkSourcedScripts(cmd, cwd); msg != "" {
+			return msg
 		}
 	}
 

@@ -48,7 +48,7 @@ func TestGuardInlineCommandsBlocksDangerousBody(t *testing.T) {
 		`echo "$(rm -rf /root/backups)"`,
 		"echo `rm -rf /root/backups`",
 		`echo "$(chown root:root /root/x)"`,
-		`echo "$(git push origin master)"`,
+		`echo "$(git push --force origin master)"`,
 		`echo "${HOME:-$(rm -rf /root/backups)}"`,
 		// no bypass through quotes: the deny list still sees the whole text
 		`bash -c "rm -rf /root/backups"`,
