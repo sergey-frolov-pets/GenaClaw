@@ -74,3 +74,7 @@ docker/data
 
 .omc/
 .worktrees/
+
+# Python кэш (появляется от py_compile в проверках)
+__pycache__/
+*.pyc
