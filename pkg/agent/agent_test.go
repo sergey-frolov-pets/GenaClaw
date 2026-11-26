@@ -2253,7 +2253,14 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	telegramChannel := &fakeMediaChannel{fakeChannel: fakeChannel{id: "rid-telegram"}}
 	al.SetChannelManager(newStartedTestChannelManager(t, msgBus, store, "telegram", telegramChannel))
 
-	mediaDir := media.TempDir()
+	// send_file only delivers files from allowed roots (media temp dir or
+	// workspace), so the fixture lives in a unique subdirectory that is removed
+	// after the test instead of polluting the shared media directory.
+	mediaDir, err := os.MkdirTemp(media.TempDir(), "artifact-test-")
+	if err != nil {
+		t.Fatalf("MkdirTemp(media) error = %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(mediaDir) })
 	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll(mediaDir) error = %v", err)
 	}

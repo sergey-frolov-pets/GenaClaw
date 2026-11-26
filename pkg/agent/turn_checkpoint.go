@@ -512,6 +512,26 @@ func (s *TurnCheckpointStore) ResumeHint(sessionKey string) string {
 	return resumeHintText(cp, age)
 }
 
+// isBackgroundSession сообщает, что ход принадлежит фоновой работе, а не
+// живому человеку: задание планировщика (крон), под-ход (spawn/subagent),
+// heartbeat. Им не шлём «всё ещё работаю» — в чат прилетел бы шум задачи,
+// которую человек не запускал, — и не подсовываем «продолжи с места обрыва»:
+// следующий ход фоновой сессии — это новая работа, а не продолжение старой.
+func isBackgroundSession(sessionKey string) bool {
+	k := strings.ToLower(strings.TrimSpace(sessionKey))
+	switch {
+	case k == "":
+		return false
+	case strings.HasPrefix(k, "agent:cron-"),
+		strings.HasPrefix(k, "cron-"),
+		strings.HasPrefix(k, "subturn-"),
+		strings.HasPrefix(k, "agent:subturn-"),
+		strings.HasPrefix(k, "heartbeat"):
+		return true
+	}
+	return false
+}
+
 func resumeHintText(cp TurnCheckpoint, age time.Duration) string {
 	var b strings.Builder
 	b.WriteString("⚠️ Предыдущий ход в этой сессии оборвался и не завершился: ")
