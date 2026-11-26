@@ -2,3 +2,8 @@
 *.sh text eol=lf
 docker/entrypoint.sh text eol=lf
 .gitignore text eol=lf
+
+# GenaClaw-specific files. Upstream does not have them; a merge must never
+# treat them as generated or re-encode them.
+assets/genaclaw.svg -text
+assets/genaclaw-512.png binary

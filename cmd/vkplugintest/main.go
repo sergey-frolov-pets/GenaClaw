@@ -13,7 +13,7 @@ import (
 func main() {
 	// 1) Тип "vk" проходит валидацию конфига?
 	var chans config.ChannelsConfig
-	raw := json.RawMessage(`{"vk":{"enabled":true,"allow_from":["707974165"],"settings":{"group_id":241164672,"token":"tok_test"}}}`)
+	raw := json.RawMessage(`{"vk":{"enabled":true,"allow_from":["100000001"],"settings":{"group_id":123456789,"token":"tok_test"}}}`)
 	if err := json.Unmarshal(raw, &chans); err != nil {
 		fmt.Println("UNMARSHAL FAIL:", err)
 		return

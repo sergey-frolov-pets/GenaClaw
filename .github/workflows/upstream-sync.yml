@@ -1,0 +1,74 @@
+name: upstream-sync
+
+# Weekly merge of sipeed/picoclaw into GenaClaw.
+# Clean merge -> pushed to a sync/upstream-YYYYMMDD branch and offered as a PR.
+# Conflicts outside the protected paths -> PR is still opened, marked failing,
+# and nothing on main is touched.
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"   # Mondays 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "genaclaw-sync-bot"
+          git config user.email "sync-bot@users.noreply.github.com"
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          set -o pipefail
+          bash scripts/sync_upstream.sh 2>&1 | tee /tmp/sync.log
+          echo "branch=$(git rev-parse --abbrev-ref HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Open pull request
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ steps.merge.outputs.branch }}"
+          if [ "$BRANCH" = "main" ]; then
+            echo "nothing to open — already up to date"
+            exit 0
+          fi
+          {
+            echo "Автоматический синк с upstream \`sipeed/picoclaw\`."
+            echo
+            echo '```'
+            cat /tmp/sync.log
+            echo '```'
+            echo
+            echo "Защищённые пути (README, иконка, этот workflow) сохранены как наши."
+          } > /tmp/pr-body.md
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "sync: upstream $(date -u +%Y-%m-%d)" \
+            --body-file /tmp/pr-body.md \
+            || echo "PR already exists for $BRANCH"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "Sync failed — a human needs to look at the conflicts."
+          cat /tmp/sync.log || true
+          exit 1
