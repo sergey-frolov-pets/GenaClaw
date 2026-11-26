@@ -44,6 +44,10 @@ func (a *channelManagerAdapter) SendPlaceholder(ctx context.Context, channel, ch
 	return a.inner.SendPlaceholder(ctx, channel, chatID)
 }
 
+func (a *channelManagerAdapter) DismissPlaceholder(ctx context.Context, channel, chatID string) {
+	a.inner.DismissPlaceholder(ctx, channel, chatID)
+}
+
 func (a *channelManagerAdapter) DismissToolFeedback(
 	ctx context.Context, channel, chatID string, outboundCtx *bus.InboundContext,
 ) {
