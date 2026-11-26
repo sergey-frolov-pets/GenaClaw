@@ -192,8 +192,10 @@ func TestShellTool_DangerousCommand_KillBlocked(t *testing.T) {
 }
 
 // TestShellTool_GuardAllowsOwnScripts verifies that constructs used by our own
-// scripts are not rejected: ${VAR}, $(...), backticks, heredoc, `source *.sh`,
-// `git push`, `chmod 755`.
+// scripts are not rejected: ${VAR}, $(...), backticks, `chmod 755`.
+// `source *.sh` and `git push` stay blocked on purpose (see
+// TestShellTool_GuardStillBlocksDangerous): sourcing an arbitrary script is code
+// execution, and pushes go through scripts/git_sync.sh.
 func TestShellTool_GuardAllowsOwnScripts(t *testing.T) {
 	tool, err := NewExecTool("", false)
 	if err != nil {
@@ -204,8 +206,7 @@ func TestShellTool_GuardAllowsOwnScripts(t *testing.T) {
 		"echo ${HOME}",
 		"echo $(date)",
 		"echo `date`",
-		"source scripts/backup.sh",
-		"git push origin main",
+		"echo $(echo $(pwd))",
 		"chmod 755 scripts/restart_gateway.sh",
 	}
 	for _, cmd := range allowed {
@@ -235,6 +236,10 @@ func TestShellTool_GuardStillBlocksDangerous(t *testing.T) {
 		"eval ls",
 		"mkfs.ext4 /dev/sdb1",
 		"shutdown -h now",
+		// deliberate blocks, kept after the guard review:
+		"source scripts/backup.sh",
+		"git push origin main",
+		"chmod 4755 scripts/restart_gateway.sh",
 	}
 	for _, cmd := range blocked {
 		r := tool.Execute(context.Background(), map[string]any{"action": "run", "command": cmd})

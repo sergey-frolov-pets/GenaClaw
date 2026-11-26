@@ -40,6 +40,7 @@ type ExecTool struct {
 	workingDir          string
 	timeout             time.Duration
 	denyPatterns        []*regexp.Regexp
+	customDenyPatterns  []*regexp.Regexp
 	allowPatterns       []*regexp.Regexp
 	customAllowPatterns []*regexp.Regexp
 	allowedPathPatterns []*regexp.Regexp
@@ -55,7 +56,7 @@ var (
 		regexp.MustCompile(`\brmdir\s+/s\b`),
 		// Match disk wiping commands (must be followed by space/args)
 		regexp.MustCompile(
-			`(^|[^-\w])\b(format|mkfs|diskpart)\b\s`,
+			`(^|[^-\w])\b(format|mkfs(\.\w+)?|diskpart)\b\s`,
 		),
 		regexp.MustCompile(`\bdd\s+if=`),
 		// Block writes to block devices (all common naming schemes).
@@ -64,25 +65,27 @@ var (
 		),
 		regexp.MustCompile(`\b(shutdown|reboot|poweroff)\b`),
 		regexp.MustCompile(`:\(\)\s*\{.*\};\s*:`),
-		regexp.MustCompile(`\$\([^)]+\)`),
-		regexp.MustCompile(`\$\{[^}]+\}`),
-		regexp.MustCompile("`[^`]+`"),
+		// Inline commands — `$(...)`, backticks, `${...}` — are not blanket-blocked
+		// any more: they are parsed and each body is re-checked against this list
+		// (see shell_inline.go). Unparseable or too deeply nested forms still fail
+		// closed. Network fetches inside a substitution stay blocked outright.
 		regexp.MustCompile(`\|\s*sh\b`),
 		regexp.MustCompile(`\|\s*bash\b`),
 		regexp.MustCompile(`;\s*rm\s+-[rf]`),
 		regexp.MustCompile(`&&\s*rm\s+-[rf]`),
 		regexp.MustCompile(`\|\|\s*rm\s+-[rf]`),
 		regexp.MustCompile(`<<\s*EOF`),
-		regexp.MustCompile(`\$\(\s*cat\s+`),
 		regexp.MustCompile(`\$\(\s*curl\s+`),
 		regexp.MustCompile(`\$\(\s*wget\s+`),
-		regexp.MustCompile(`\$\(\s*which\s+`),
 		regexp.MustCompile(`\bsudo\b`),
-		regexp.MustCompile(`\bchmod\s+[0-7]{3,4}\b`),
+		// Plain modes (755/644) are everyday work; setuid/setgid and +s/+w stay blocked.
+		regexp.MustCompile(`\bchmod\s+([1-7][0-7]{3}|[ugoa]*\+[sw])\b`),
 		regexp.MustCompile(`\bchown\b`),
 		regexp.MustCompile(`\bpkill\b`),
 		regexp.MustCompile(`\bkillall\b`),
-		regexp.MustCompile(`\bkill\b`),
+		// Narrowed: only signalling every process is blocked; targeted PID signals
+		// are needed by our own restart scripts.
+		regexp.MustCompile(`\bkill\s+(-[0-9]+\s+)?-1\b`),
 		regexp.MustCompile(`\bcurl\b.*\|\s*(sh|bash)`),
 		regexp.MustCompile(`\bwget\b.*\|\s*(sh|bash)`),
 		regexp.MustCompile(`\bnpm\s+install\s+-g\b`),
@@ -147,6 +150,7 @@ func NewExecToolWithConfig(
 	allowPaths ...[]*regexp.Regexp,
 ) (*ExecTool, error) {
 	denyPatterns := make([]*regexp.Regexp, 0)
+	customDenyPatterns := make([]*regexp.Regexp, 0)
 	customAllowPatterns := make([]*regexp.Regexp, 0)
 	var allowedPathPatterns []*regexp.Regexp
 	allowRemote := true
@@ -173,6 +177,7 @@ func NewExecToolWithConfig(
 						return nil, fmt.Errorf("invalid custom deny pattern %q: %w", pattern, err)
 					}
 					denyPatterns = append(denyPatterns, re)
+					customDenyPatterns = append(customDenyPatterns, re)
 				}
 			}
 		} else {
@@ -202,6 +207,7 @@ func NewExecToolWithConfig(
 		workingDir:          workingDir,
 		timeout:             timeout,
 		denyPatterns:        denyPatterns,
+		customDenyPatterns:  customDenyPatterns,
 		allowPatterns:       nil,
 		customAllowPatterns: customAllowPatterns,
 		allowedPathPatterns: allowedPathPatterns,
@@ -1139,7 +1145,16 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 	cmd := strings.TrimSpace(command)
 	lower := strings.ToLower(cmd)
 
-	// Custom allow patterns exempt a command from deny checks.
+	// Custom (user-configured) deny patterns apply even to a custom-allowed
+	// command: an allowlist entry exempts the built-in heuristics, it does not
+	// switch off the operator's own red lines.
+	for _, pattern := range t.customDenyPatterns {
+		if pattern.MatchString(lower) {
+			return "Command blocked by safety guard (dangerous pattern detected)"
+		}
+	}
+
+	// Custom allow patterns exempt a command from the built-in deny checks.
 	explicitlyAllowed := false
 	for _, pattern := range t.customAllowPatterns {
 		if pattern.MatchString(lower) {
@@ -1152,6 +1167,14 @@ func (t *ExecTool) guardCommand(command, cwd string) string {
 		for _, pattern := range t.denyPatterns {
 			if pattern.MatchString(lower) {
 				return "Command blocked by safety guard (dangerous pattern detected)"
+			}
+		}
+		// Inline commands (`$(...)`, backticks, `${...}`) are verified by parsing
+		// instead of a blanket regex: each body must pass the same deny list.
+		// Skipped when deny patterns are disabled in config.
+		if len(t.denyPatterns) > 0 {
+			if msg := checkInlineCommands(lower, t.denyPatterns); msg != "" {
+				return msg
 			}
 		}
 	}
